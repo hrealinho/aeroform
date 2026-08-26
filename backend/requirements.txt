@@ -1,0 +1,12 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+sqlalchemy==2.0.43
+pydantic==2.11.7
+pydantic-settings==2.10.1
+python-multipart==0.0.20
+fitparse==1.2.0
+psycopg[binary]==3.2.9
+celery==5.5.3
+redis==6.4.0
+httpx==0.28.1
+pytest==8.4.1

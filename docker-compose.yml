@@ -1,0 +1,29 @@
+services:
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://endurance:endurance@db:5432/endurance
+      STORAGE_PATH: /data/raw
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - rawdata:/data/raw
+    ports: ["8000:8000"]
+    depends_on: [db, redis]
+  web:
+    build: ./frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+    ports: ["3000:3000"]
+    depends_on: [api]
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: endurance
+      POSTGRES_PASSWORD: endurance
+      POSTGRES_DB: endurance
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+  redis:
+    image: redis:8-alpine
+volumes:
+  pgdata:
+  rawdata:
