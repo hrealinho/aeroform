@@ -5,9 +5,35 @@ services:
       DATABASE_URL: postgresql+psycopg://endurance:endurance@db:5432/endurance
       STORAGE_PATH: /data/raw
       REDIS_URL: redis://redis:6379/0
+      ASYNC_TASKS: "true"
+      APP_SECRET: ${APP_SECRET:-change-me-in-production}
+      STRAVA_CLIENT_ID: ${STRAVA_CLIENT_ID:-}
+      STRAVA_CLIENT_SECRET: ${STRAVA_CLIENT_SECRET:-}
+      STRAVA_REDIRECT_URI: ${STRAVA_REDIRECT_URI:-http://localhost:8000/api/v1/strava/callback}
+      STRAVA_FRONTEND_REDIRECT_URI: ${STRAVA_FRONTEND_REDIRECT_URI:-http://localhost:3000/imports?strava=connected}
+      STRAVA_WEBHOOK_VERIFY_TOKEN: ${STRAVA_WEBHOOK_VERIFY_TOKEN:-change-me}
+      STRAVA_SYNC_STREAMS: ${STRAVA_SYNC_STREAMS:-false}
     volumes:
       - rawdata:/data/raw
     ports: ["8000:8000"]
+    depends_on: [db, redis]
+  worker:
+    build: ./backend
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=INFO --concurrency=2
+    environment:
+      DATABASE_URL: postgresql+psycopg://endurance:endurance@db:5432/endurance
+      STORAGE_PATH: /data/raw
+      REDIS_URL: redis://redis:6379/0
+      ASYNC_TASKS: "true"
+      APP_SECRET: ${APP_SECRET:-change-me-in-production}
+      STRAVA_CLIENT_ID: ${STRAVA_CLIENT_ID:-}
+      STRAVA_CLIENT_SECRET: ${STRAVA_CLIENT_SECRET:-}
+      STRAVA_REDIRECT_URI: ${STRAVA_REDIRECT_URI:-http://localhost:8000/api/v1/strava/callback}
+      STRAVA_FRONTEND_REDIRECT_URI: ${STRAVA_FRONTEND_REDIRECT_URI:-http://localhost:3000/imports?strava=connected}
+      STRAVA_WEBHOOK_VERIFY_TOKEN: ${STRAVA_WEBHOOK_VERIFY_TOKEN:-change-me}
+      STRAVA_SYNC_STREAMS: ${STRAVA_SYNC_STREAMS:-false}
+    volumes:
+      - rawdata:/data/raw
     depends_on: [db, redis]
   web:
     build: ./frontend

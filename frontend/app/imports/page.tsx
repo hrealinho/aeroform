@@ -1,1 +1,3 @@
-import UploadForm from "./UploadForm";export default function Page(){return <><h1>Imports & connections</h1><p className="muted">Bring your complete training history into the athlete model.</p><UploadForm/><div className="card section"><h2>Strava</h2><p className="muted">OAuth + historical sync adapter is the next integration slice. The canonical model is already source-independent.</p><button className="button" disabled>Connect Strava</button></div></>}
+import UploadForm from "./UploadForm";
+import StravaConnection from "./StravaConnection";
+export default function Page(){return <><h1>Imports & connections</h1><p className="muted">Bring your complete training history into the athlete model. Strava backfills are paginated and rate-limit aware; file imports run through the same canonical activity pipeline.</p><StravaConnection/><UploadForm/></>}

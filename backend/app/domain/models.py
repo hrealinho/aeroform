@@ -172,3 +172,22 @@ class PlannedWorkout(Base):
     steps: Mapped[list] = mapped_column(JSON, default=list)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
     matched_activity_id: Mapped[int | None] = mapped_column(ForeignKey("activities.id"), nullable=True)
+
+
+class IntegrationConnection(Base):
+    __tablename__ = "integration_connections"
+    __table_args__ = (UniqueConstraint("athlete_id", "provider", name="uq_athlete_provider_connection"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    athlete_id: Mapped[int] = mapped_column(ForeignKey("athletes.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    external_athlete_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    access_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    refresh_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scopes: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(32), default="connected", index=True)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -9,4 +9,5 @@ psycopg[binary]==3.2.9
 celery==5.5.3
 redis==6.4.0
 httpx==0.28.1
+cryptography==45.0.6
 pytest==8.4.1
