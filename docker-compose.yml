@@ -13,6 +13,10 @@ services:
       STRAVA_FRONTEND_REDIRECT_URI: ${STRAVA_FRONTEND_REDIRECT_URI:-http://localhost:3000/imports?strava=connected}
       STRAVA_WEBHOOK_VERIFY_TOKEN: ${STRAVA_WEBHOOK_VERIFY_TOKEN:-change-me}
       STRAVA_SYNC_STREAMS: ${STRAVA_SYNC_STREAMS:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-local}
+      AI_MODEL: ${AI_MODEL:-endurance-planner-v0.4}
+      AI_ENDPOINT: ${AI_ENDPOINT:-}
+      AI_API_KEY: ${AI_API_KEY:-}
     volumes:
       - rawdata:/data/raw
     ports: ["8000:8000"]

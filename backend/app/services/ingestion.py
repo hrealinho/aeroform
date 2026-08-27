@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 import hashlib
+import gzip
 import os
 import shutil
 import tempfile
@@ -15,11 +16,28 @@ from app.importers.fit import parse_fit
 from app.importers.gpx import parse_gpx
 from app.importers.tcx import parse_tcx
 from app.importers.zip_import import safe_members
+from app.importers.formats import activity_format, safe_basename
 from app.metrics.load import power_load, hr_trimp_load, rpe_load, mountain_mechanical_load
 from app.metrics.streams import normalized_power, power_zone_seconds, hr_zone_seconds, aerobic_decoupling
 from app.services.dedup import activity_fingerprint
 
 PARSERS = {".fit": parse_fit, ".gpx": parse_gpx, ".tcx": parse_tcx}
+
+
+MAX_GZIP_EXPANDED_BYTES = 500 * 1024 * 1024
+
+
+def _decompress_gzip_limited(source: str, target: str, max_bytes: int = MAX_GZIP_EXPANDED_BYTES) -> None:
+    written = 0
+    with gzip.open(source, "rb") as src, open(target, "wb") as dst:
+        while True:
+            chunk = src.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > max_bytes:
+                raise ValueError("Gzip activity exceeds expanded size limit")
+            dst.write(chunk)
 
 
 def sha256_file(path: str):
@@ -193,33 +211,54 @@ def ingest_parsed(
     return activity, False
 
 
-def ingest_file(db: Session, athlete_id: int, path: str, source_type: str = "upload", import_session_id: int | None = None):
-    suffix = Path(path).suffix.lower()
-    if suffix not in PARSERS:
-        raise ValueError(f"Unsupported activity format: {suffix}")
+def ingest_file(db: Session, athlete_id: int, path: str, source_type: str = "upload", import_session_id: int | None = None, original_name: str | None = None):
+    display_name = original_name or Path(path).name
+    fmt = activity_format(display_name) or activity_format(path)
+    if not fmt:
+        raise ValueError(f"Unsupported activity format: {display_name}")
+    inner_suffix, compressed = fmt
     digest = sha256_file(path)
     os.makedirs(settings.storage_path, exist_ok=True)
-    storage_key = os.path.join(settings.storage_path, digest + suffix)
+    raw_suffix = Path(display_name).name.lower()
+    matched_suffix = next((x for x in (".fit.gz", ".gpx.gz", ".tcx.gz", ".fit", ".gpx", ".tcx") if raw_suffix.endswith(x)), inner_suffix)
+    athlete_storage = os.path.join(settings.storage_path, str(athlete_id))
+    os.makedirs(athlete_storage, exist_ok=True)
+    storage_key = os.path.join(athlete_storage, digest + matched_suffix)
     if not os.path.exists(storage_key):
         shutil.copy2(path, storage_key)
-    raw = db.scalar(select(RawActivityFile).where(RawActivityFile.storage_key == storage_key))
+    raw = db.scalar(select(RawActivityFile).where(RawActivityFile.athlete_id == athlete_id, RawActivityFile.storage_key == storage_key))
     if raw is None:
         raw = RawActivityFile(
             athlete_id=athlete_id,
             import_session_id=import_session_id,
-            filename=Path(path).name,
+            filename=display_name,
             storage_key=storage_key,
             sha256=digest,
             parser_version=settings.metric_version,
         )
         db.add(raw)
         db.flush()
-    parsed = PARSERS[suffix](path)
-    return ingest_parsed(db, athlete_id, parsed, source_type, raw_file_id=raw.id, import_session_id=import_session_id)
+
+    parse_path = path
+    temp_path = None
+    try:
+        if compressed:
+            fd, temp_path = tempfile.mkstemp(suffix=inner_suffix)
+            os.close(fd)
+            _decompress_gzip_limited(path, temp_path)
+            parse_path = temp_path
+        parsed = PARSERS[inner_suffix](parse_path)
+        parsed.source_metadata = {**(parsed.source_metadata or {}), "original_filename": display_name, "compressed": compressed}
+        return ingest_parsed(db, athlete_id, parsed, source_type, raw_file_id=raw.id, import_session_id=import_session_id)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 def ingest_zip(db: Session, athlete_id: int, zip_path: str, import_session: ImportSession, finalize: bool = True):
     members = list(safe_members(zip_path))
+    # The parent upload itself counted as one staged file. Replace that count with
+    # the number of actual supported activity files discovered inside the archive.
     import_session.discovered_count += max(0, len(members) - 1)
     import_session.status = "processing"
     db.commit()
@@ -227,11 +266,15 @@ def ingest_zip(db: Session, athlete_id: int, zip_path: str, import_session: Impo
     with zipfile.ZipFile(zip_path) as zf, tempfile.TemporaryDirectory() as tmp:
         for index, info in enumerate(members):
             try:
-                suffix = Path(info.filename).suffix.lower()
-                target = os.path.join(tmp, f"{index}{suffix}")
+                original = safe_basename(info.filename)
+                fmt = activity_format(original)
+                if not fmt:
+                    continue
+                compound_suffix = next((x for x in (".fit.gz", ".gpx.gz", ".tcx.gz", ".fit", ".gpx", ".tcx") if original.lower().endswith(x)), Path(original).suffix.lower())
+                target = os.path.join(tmp, f"{index}{compound_suffix}")
                 with zf.open(info) as src, open(target, "wb") as dst:
                     shutil.copyfileobj(src, dst)
-                _, duplicate = ingest_file(db, athlete_id, target, "zip", import_session.id)
+                _, duplicate = ingest_file(db, athlete_id, target, "zip", import_session.id, original_name=original)
                 if duplicate:
                     import_session.duplicate_count += 1
                 else:

@@ -19,7 +19,16 @@ class Settings(BaseSettings):
     strava_sync_page_size: int = 100
     strava_sync_streams: bool = False
 
-    metric_version: str = "v0.3"
+    # v0.4 AI provider contract. The local provider is fully deterministic and
+    # requires no secret. A remote provider can be connected later through a
+    # small JSON contract without coupling planning rules to one model vendor.
+    ai_provider: str = "local"  # local | http_json
+    ai_model: str = "endurance-planner-v0.4"
+    ai_endpoint: str | None = None
+    ai_api_key: str | None = None
+    ai_timeout_s: float = 30.0
+
+    metric_version: str = "v0.4"
     fitness_tau_days: float = 42.0
     fatigue_tau_days: float = 7.0
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

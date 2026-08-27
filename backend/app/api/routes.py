@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, func
 from app.core.config import settings
 from app.db.session import get_db
-from app.domain.models import Athlete, Activity, ActivityMetrics, ImportSession, Objective, PlannedWorkout, TrainingBlock, PlanningConstraint, PlanChangeAudit, IntegrationConnection
-from app.domain.schemas import ObjectiveCreate, TrainingBlockCreate, TrainingBlockUpdate, PlannedWorkoutCreate, PlannedWorkoutUpdate, ManualMatch, PlanningConstraintCreate
+from app.domain.models import Athlete, Activity, ActivityMetrics, ImportSession, Objective, PlannedWorkout, TrainingBlock, PlanningConstraint, PlanChangeAudit, IntegrationConnection, AthleteCoachProfile, AIProposal, CoachMessage
+from app.domain.schemas import ObjectiveCreate, TrainingBlockCreate, TrainingBlockUpdate, PlannedWorkoutCreate, PlannedWorkoutUpdate, ManualMatch, PlanningConstraintCreate, CoachProfileUpdate, CoachAsk, GenerateWeekRequest, AdaptWeekRequest
 from app.metrics.fitness import ewma_series
 from app.planning.workouts import estimate_planned_load, infer_intensity
 from app.planning.projection import project_load_series, projection_warnings, weekly_totals
@@ -17,6 +17,13 @@ from app.integrations.strava.client import authorization_url, exchange_code, rev
 from app.services.oauth_state import create_state, verify_state
 from app.services.token_crypto import encrypt_token
 from app.tasks.imports import process_uploaded_files, sync_strava_history, sync_strava_activity, remove_strava_activity
+from app.importers.formats import activity_format
+from app.ai.context import build_athlete_context
+from app.ai.analyst import analyse_question
+from app.ai.provider import get_provider
+from app.ai.planner import generate_week_seed, adapt_week_seed
+from app.ai.commands import validate_commands, apply_commands
+from app.ai.explain import explain_workout
 
 router = APIRouter(prefix="/api/v1")
 
@@ -42,7 +49,7 @@ def dispatch(task, *args):
 
 @router.get("/health")
 def health():
-    return {"status": "ok", "version": "0.3.0", "async_tasks": settings.async_tasks}
+    return {"status": "ok", "version": "0.4.0", "async_tasks": settings.async_tasks, "ai_provider": settings.ai_provider}
 
 
 @router.get("/activities")
@@ -77,16 +84,21 @@ async def upload_files(files: list[UploadFile] = File(...), db: Session = Depend
     athlete = demo_athlete(db)
     if not files:
         raise HTTPException(400, "No files supplied")
-    allowed = {".fit", ".gpx", ".tcx", ".zip"}
     stage_dir = Path(settings.storage_path) / "staging" / uuid.uuid4().hex
     stage_dir.mkdir(parents=True, exist_ok=True)
     staged: list[str] = []
     names: list[str] = []
     for upload in files:
         filename = upload.filename or "activity"
-        suffix = Path(filename).suffix.lower()
-        if suffix not in allowed:
-            raise HTTPException(400, f"Unsupported file type: {suffix or filename}")
+        fmt = activity_format(filename)
+        is_zip = filename.lower().endswith(".zip")
+        if not fmt and not is_zip:
+            raise HTTPException(400, f"Unsupported file type: {filename}")
+        if is_zip:
+            suffix = ".zip"
+        else:
+            lower = filename.lower()
+            suffix = next(ext for ext in (".fit.gz", ".gpx.gz", ".tcx.gz", ".fit", ".gpx", ".tcx") if lower.endswith(ext))
         path = stage_dir / f"{uuid.uuid4().hex}{suffix}"
         with path.open("wb") as dst:
             while chunk := await upload.read(1024 * 1024):
@@ -623,3 +635,196 @@ def plan_audit(limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_d
     athlete = demo_athlete(db)
     return list(db.scalars(select(PlanChangeAudit).where(PlanChangeAudit.athlete_id == athlete.id).order_by(PlanChangeAudit.created_at.desc()).limit(limit)))
 
+
+
+def _coach_profile_dict(profile: AthleteCoachProfile | None) -> dict:
+    return {
+        "available_hours_per_week": profile.available_hours_per_week if profile else None,
+        "preferred_long_day": profile.preferred_long_day if profile else 5,
+        "preferred_rest_day": profile.preferred_rest_day if profile else 0,
+        "doubles_allowed": profile.doubles_allowed if profile else False,
+        "preferences": profile.preferences if profile else {},
+    }
+
+
+def _proposal_dict(p: AIProposal) -> dict:
+    return {
+        "id": p.id, "proposal_type": p.proposal_type, "status": p.status, "title": p.title,
+        "summary": p.summary, "commands": p.commands or [], "validation": p.validation or {},
+        "provider": p.provider, "created_at": p.created_at, "decided_at": p.decided_at,
+    }
+
+
+def _compact_context(context: dict) -> dict:
+    return {
+        "as_of": context.get("as_of"), "state": context.get("state"), "objectives": context.get("objectives"),
+        "current_block": context.get("current_block"), "profile": context.get("profile"),
+        "recent_weeks": context.get("recent_weeks", [])[-8:], "adherence_28d_pct": context.get("adherence_28d_pct"),
+    }
+
+
+@router.get("/coach/profile")
+def coach_profile(db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    profile = db.scalar(select(AthleteCoachProfile).where(AthleteCoachProfile.athlete_id == athlete.id))
+    return _coach_profile_dict(profile)
+
+
+@router.put("/coach/profile")
+def update_coach_profile(payload: CoachProfileUpdate, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    profile = db.scalar(select(AthleteCoachProfile).where(AthleteCoachProfile.athlete_id == athlete.id))
+    if profile is None:
+        profile = AthleteCoachProfile(athlete_id=athlete.id)
+        db.add(profile)
+    for key, value in payload.model_dump().items():
+        setattr(profile, key, value)
+    db.commit(); db.refresh(profile)
+    return _coach_profile_dict(profile)
+
+
+@router.get("/coach/context")
+def coach_context(db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    return build_athlete_context(db, athlete)
+
+
+@router.post("/coach/ask")
+def coach_ask(payload: CoachAsk, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    context = build_athlete_context(db, athlete)
+    draft = analyse_question(context, payload.question)
+    provider = get_provider()
+    provider_error = None
+    try:
+        result = provider.synthesize_analysis(payload.question, context, draft)
+    except Exception as exc:
+        result = draft
+        provider_error = str(exc)[:300]
+    db.add(CoachMessage(athlete_id=athlete.id, role="user", content=payload.question, evidence=[]))
+    assistant = CoachMessage(athlete_id=athlete.id, role="assistant", content=result["answer"], evidence=result.get("evidence") or [])
+    db.add(assistant); db.commit(); db.refresh(assistant)
+    return {
+        "id": assistant.id, "answer": result["answer"], "evidence": result.get("evidence") or [],
+        "confidence": result.get("confidence", "medium"), "provider": getattr(provider, "name", "local"),
+        "provider_error": provider_error,
+    }
+
+
+@router.get("/coach/messages")
+def coach_messages(limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    rows = list(db.scalars(select(CoachMessage).where(CoachMessage.athlete_id == athlete.id).order_by(CoachMessage.created_at.desc()).limit(limit)))
+    rows.reverse()
+    return [{"id": m.id, "role": m.role, "content": m.content, "evidence": m.evidence or [], "created_at": m.created_at} for m in rows]
+
+
+@router.post("/coach/generate-week")
+def coach_generate_week(payload: GenerateWeekRequest, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    context = build_athlete_context(db, athlete)
+    today = date.today()
+    week_start = payload.week_start or (today + timedelta(days=(7 - today.weekday()) % 7 or 7))
+    week_start = week_start - timedelta(days=week_start.weekday())
+    seed_summary, seed_commands = generate_week_seed(context, week_start, payload.objective_id, payload.strategy)
+    provider = get_provider()
+    try:
+        plan = provider.refine_plan("generate_week", context, seed_summary, seed_commands)
+        commands, summary, provider_name = plan.commands, plan.summary, plan.provider
+    except Exception as exc:
+        commands, summary, provider_name = seed_commands, seed_summary + f" Provider refinement was unavailable ({str(exc)[:120]}).", "local_fallback"
+    validation = validate_commands(db, athlete.id, commands)
+    if not validation["valid"] and commands != seed_commands:
+        seed_validation = validate_commands(db, athlete.id, seed_commands)
+        if seed_validation["valid"]:
+            commands, validation, provider_name = seed_commands, seed_validation, "local_fallback"
+            summary += " The remote proposal failed deterministic validation, so the validated local seed was kept."
+    proposal = AIProposal(
+        athlete_id=athlete.id, proposal_type="generate_week", status="pending", title=f"Week of {week_start.isoformat()}",
+        summary=summary, commands=validation.get("commands") or commands, context_snapshot=_compact_context(context),
+        validation=validation, provider=provider_name,
+    )
+    db.add(proposal); db.commit(); db.refresh(proposal)
+    return _proposal_dict(proposal)
+
+
+@router.post("/coach/adapt-week")
+def coach_adapt_week(payload: AdaptWeekRequest, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    context = build_athlete_context(db, athlete)
+    today = date.today()
+    week_start = payload.week_start or (today - timedelta(days=today.weekday()))
+    week_start = week_start - timedelta(days=week_start.weekday())
+    seed_summary, seed_commands = adapt_week_seed(context, week_start)
+    provider = get_provider()
+    try:
+        plan = provider.refine_plan("adapt_week", context, seed_summary, seed_commands)
+        commands, summary, provider_name = plan.commands, plan.summary, plan.provider
+    except Exception as exc:
+        commands, summary, provider_name = seed_commands, seed_summary + f" Provider refinement was unavailable ({str(exc)[:120]}).", "local_fallback"
+    validation = validate_commands(db, athlete.id, commands)
+    if not validation["valid"] and commands != seed_commands:
+        seed_validation = validate_commands(db, athlete.id, seed_commands)
+        if seed_validation["valid"]:
+            commands, validation, provider_name = seed_commands, seed_validation, "local_fallback"
+            summary += " The remote proposal failed deterministic validation, so the validated local seed was kept."
+    proposal = AIProposal(
+        athlete_id=athlete.id, proposal_type="adapt_week", status="pending", title=f"Adapt week of {week_start.isoformat()}",
+        summary=summary, commands=validation.get("commands") or commands, context_snapshot=_compact_context(context),
+        validation=validation, provider=provider_name,
+    )
+    db.add(proposal); db.commit(); db.refresh(proposal)
+    return _proposal_dict(proposal)
+
+
+@router.get("/coach/proposals")
+def coach_proposals(limit: int = Query(30, ge=1, le=100), db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    rows = db.scalars(select(AIProposal).where(AIProposal.athlete_id == athlete.id).order_by(AIProposal.created_at.desc()).limit(limit))
+    return [_proposal_dict(p) for p in rows]
+
+
+@router.post("/coach/proposals/{proposal_id}/approve")
+def approve_proposal(proposal_id: int, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    proposal = db.get(AIProposal, proposal_id)
+    if not proposal or proposal.athlete_id != athlete.id:
+        raise HTTPException(404, "AI proposal not found")
+    if proposal.status != "pending":
+        raise HTTPException(409, f"Proposal is already {proposal.status}")
+    validation = validate_commands(db, athlete.id, proposal.commands or [])
+    proposal.validation = validation
+    if not validation["valid"]:
+        db.commit()
+        raise HTTPException(409, {"message": "Proposal is no longer valid against the current calendar", "validation": validation})
+    try:
+        applied = apply_commands(db, athlete.id, proposal.commands or [], proposal.summary)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    proposal.status = "applied"
+    proposal.decided_at = datetime.now(timezone.utc)
+    db.commit(); db.refresh(proposal)
+    return {"proposal": _proposal_dict(proposal), "applied": applied}
+
+
+@router.post("/coach/proposals/{proposal_id}/reject")
+def reject_proposal(proposal_id: int, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    proposal = db.get(AIProposal, proposal_id)
+    if not proposal or proposal.athlete_id != athlete.id:
+        raise HTTPException(404, "AI proposal not found")
+    if proposal.status != "pending":
+        raise HTTPException(409, f"Proposal is already {proposal.status}")
+    proposal.status = "rejected"
+    proposal.decided_at = datetime.now(timezone.utc)
+    db.commit(); db.refresh(proposal)
+    return _proposal_dict(proposal)
+
+
+@router.get("/planned-workouts/{workout_id}/why")
+def why_planned_workout(workout_id: int, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    workout = db.get(PlannedWorkout, workout_id)
+    if not workout or workout.athlete_id != athlete.id:
+        raise HTTPException(404, "Planned workout not found")
+    return explain_workout(db, athlete.id, workout)

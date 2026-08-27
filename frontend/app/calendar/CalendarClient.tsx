@@ -26,6 +26,7 @@ export default function CalendarClient(){
   const [projection,setProjection]=useState<Projection>({warnings:[],weeks:[]});
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState("");
+  const [why,setWhy]=useState<{title:string;reasons:string[];evidence:any[]}|null>(null);
   const [form,setForm]=useState({date:isoDate(new Date()),time:"18:00",sport:"running",name:"Easy run",durationMin:"60",distanceKm:"",elevationM:"",intensity:"easy",warmupMin:"",reps:"",workMin:"",recoveryMin:"",cooldownMin:""});
   const days=useMemo(()=>Array.from({length:7},(_,i)=>{const d=new Date(week);d.setDate(d.getDate()+i);return d}),[week]);
   const start=isoDate(days[0]); const end=isoDate(days[6]);
@@ -69,6 +70,11 @@ export default function CalendarClient(){
   async function remove(w:Planned){
     const r=await fetch(`${API}/planned-workouts/${w.id}`,{method:"DELETE"});if(!r.ok){setError(await r.text());return}await load();
   }
+  async function whyWorkout(w:Planned){
+    const r=await fetch(`${API}/planned-workouts/${w.id}/why`);
+    if(!r.ok){setError(await r.text());return}
+    setWhy(await r.json());
+  }
   async function autoMatch(){
     const r=await fetch(`${API}/matching/auto?start=${start}&end=${end}`,{method:"POST"});if(!r.ok){setError(await r.text());return}await load();
   }
@@ -108,7 +114,7 @@ export default function CalendarClient(){
               <strong>{w.name}</strong>
               <div className="workoutMeta"><span>{hours(w.duration_s)}</span><span>{km(w.distance_m)}</span><span>Load {Math.round(w.projected_load||0)}</span></div>
               <div className="row"><span className="badge">{w.intensity}</span>{w.matched_activity_id&&<span className="badge success">matched</span>}</div>
-              <div className="cardActions"><button onClick={()=>toggleLock(w)}>{w.locked?"Unlock":"Lock"}</button><button disabled={w.locked} onClick={()=>remove(w)}>Delete</button></div>
+              <div className="cardActions"><button onClick={()=>whyWorkout(w)}>Why?</button><button onClick={()=>toggleLock(w)}>{w.locked?"Unlock":"Lock"}</button><button disabled={w.locked} onClick={()=>remove(w)}>Delete</button></div>
             </article>)}
             {actual.map(a=><article className="actualCard" key={a.id}><div className="row spread"><span className="sportLabel">ACTUAL · {a.sport.replace("_"," ")}</span><span className="badge success">{Math.round(a.training_load||0)} load</span></div><strong>{a.name||a.sport}</strong><div className="workoutMeta"><span>{hours(a.duration_s)}</span><span>{km(a.distance_m)}</span>{a.elevation_gain_m?<span>{Math.round(a.elevation_gain_m)}m+</span>:null}</div></article>)}
             {!loading&&planned.length===0&&actual.length===0&&<div className="emptyDay">Drop workout here</div>}
@@ -134,7 +140,7 @@ export default function CalendarClient(){
         <label>Recovery (min)<input className="input" type="number" min="0" step="0.5" value={form.recoveryMin} onChange={e=>setForm({...form,recoveryMin:e.target.value})}/></label>
         <label>Cool-down (min)<input className="input" type="number" min="0" value={form.cooldownMin} onChange={e=>setForm({...form,cooldownMin:e.target.value})}/></label>
       </div><button className="button section" type="submit">Add workout</button></form>
-      <div className="card"><h2>Plan vs actual</h2><p className="muted">Automatically match imported activities to planned sessions using sport, time, duration and distance. Matches never duplicate activity load.</p><button className="button" onClick={autoMatch}>Match completed activities</button><div className="section"><h3>Projection rule checks</h3><p className="muted">v0.3 flags weekly load jumps above 15% and key sessions stacked within 24 hours. These are explainable warnings, not opaque AI decisions.</p></div></div>
+      <div className="card"><h2>Plan vs actual</h2><p className="muted">Automatically match imported activities to planned sessions using sport, time, duration and distance. Matches never duplicate activity load.</p><button className="button" onClick={autoMatch}>Match completed activities</button><div className="section"><h3>Projection rule checks</h3><p className="muted">v0.4 validates weekly load jumps, key-session spacing, locks and availability before AI proposals can be applied.</p></div>{why&&<div className="section whyPanel"><div className="row spread"><h3>{why.title}</h3><button className="button secondary" onClick={()=>setWhy(null)}>Close</button></div><ul>{why.reasons.map((r,i)=><li key={i}>{r}</li>)}</ul>{why.evidence.length>0&&<div className="evidenceRow">{why.evidence.map((e:any,i:number)=><span className="badge" key={i}>{e.date} · {e.duration_h}h · {e.load??"?"} load</span>)}</div>}</div>}</div>
     </div>
   </>
 }

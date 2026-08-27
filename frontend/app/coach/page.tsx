@@ -1,1 +1,2 @@
-export default function Page(){return <><h1>AI Coach</h1><p className="muted">AI will operate over structured metrics and validated planning commands, never raw activity files directly.</p><div className="card section"><h2>Coach architecture ready</h2><p>The AI provider is deliberately not hard-wired in this first slice. The next step is an athlete-context service plus planning-command validator, then an LLM adapter.</p></div></>}
+import CoachClient from "./CoachClient";
+export default function Page(){return <CoachClient/>}

@@ -105,3 +105,53 @@ class PlanningConstraintCreate(BaseModel):
         if any(day < 0 or day > 6 for day in self.weekdays):
             raise ValueError("weekdays must use Monday=0 through Sunday=6")
         return self
+
+
+class CoachProfileUpdate(BaseModel):
+    available_hours_per_week: float | None = Field(default=None, ge=0, le=80)
+    preferred_long_day: int | None = Field(default=None, ge=0, le=6)
+    preferred_rest_day: int | None = Field(default=None, ge=0, le=6)
+    doubles_allowed: bool = False
+    preferences: dict = Field(default_factory=dict)
+
+
+class CoachAsk(BaseModel):
+    question: str = Field(min_length=2, max_length=4000)
+
+
+class GenerateWeekRequest(BaseModel):
+    week_start: date | None = None
+    objective_id: int | None = None
+    strategy: str = "balanced"
+
+
+class AdaptWeekRequest(BaseModel):
+    week_start: date | None = None
+
+
+class PlanCommand(BaseModel):
+    action: str = Field(pattern="^(create_workout|update_workout|move_workout|delete_workout)$")
+    workout_id: int | None = None
+    scheduled_at: datetime | None = None
+    sport: str | None = None
+    name: str | None = None
+    duration_s: float | None = Field(default=None, ge=0)
+    distance_m: float | None = Field(default=None, ge=0)
+    elevation_m: float | None = Field(default=None, ge=0)
+    intensity: str | None = None
+    steps: list[dict] | None = None
+    objective_id: int | None = None
+    block_id: int | None = None
+    reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_shape(self):
+        if self.action == "create_workout":
+            if not self.scheduled_at or not self.sport or not self.name:
+                raise ValueError("create_workout requires scheduled_at, sport, and name")
+        else:
+            if self.workout_id is None:
+                raise ValueError(f"{self.action} requires workout_id")
+        if self.action == "move_workout" and self.scheduled_at is None:
+            raise ValueError("move_workout requires scheduled_at")
+        return self

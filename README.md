@@ -1,34 +1,49 @@
 # Endurance AI Platform
 
-Training-first endurance analytics, history ingestion and adaptive planning foundation.
+Training-first endurance analytics, season planning and grounded AI coaching. The product deliberately keeps social mechanics out of the core experience: activities become private training data used for analytics, projections and adaptive planning.
 
-## v0.3 major slice
+## v0.4: grounded AI coach and adaptive planner
 
-This version adds the first production-shaped integration and ingestion layer on top of v0.1:
+v0.4 adds the first end-to-end AI planning loop on top of the v0.3 calendar and projection engine:
 
-- Strava OAuth2 connect/callback flow
-- encrypted access and refresh token storage
-- automatic token refresh
-- paginated historical Strava backfill
-- rate-limit-aware backfill that can pause and resume
-- Strava webhook ingestion for activity create/update/delete events
-- Strava deauthorization handling and explicit disconnect endpoint
-- asynchronous Celery + Redis import workers
-- durable staging for FIT/GPX/TCX/ZIP uploads before background processing
-- live import progress polling in the web UI
-- source-aware deduplication through one canonical activity model
-- stream-derived normalized power when FIT streams contain power
-- HR and power zone time calculation when historical thresholds exist
-- aerobic decoupling calculation when stream quality is sufficient
-- weekly load/volume/elevation/mechanical-load analytics endpoint
-- richer activity API exposing metric details and load provenance
+- compact Athlete Context built from derived metrics, objectives, constraints, preferences and plan state
+- persistent Ask Coach analysis with evidence returned separately from model judgement
+- weekly plan generation from objectives, recent capacity, current training block and availability
+- current-week adaptation after unexpectedly large load or missed sessions
+- structured AI commands: create, update, move and delete planned workouts
+- deterministic command validation before any proposal can touch the calendar
+- approval/rejection workflow; AI changes are never silently applied
+- locked workouts are immutable to the AI
+- projection checks compare the current plan with the proposed plan
+- AI plan-change audit records before/after state and reasoning
+- "Why this session?" explanations for planned workouts
+- coach preferences for available hours, long-session day, rest day and doubles
+- provider abstraction: deterministic local provider by default, optional vendor-neutral JSON AI gateway
 
-The key rule remains: Strava is an adapter. Activities are imported into the platform's canonical model and all analytics operate from that model.
+The key architecture rule is unchanged: **the LLM is not the metrics engine or the planning rules engine**. It can reason over structured context and propose commands, but the application validates those commands before they become a pending proposal and validates them again when the user approves.
+
+## Strava export compatibility discovered with real history
+
+v0.4 also hardens bulk import against the format used by real Strava exports. In addition to plain FIT/GPX/TCX, archives may contain:
+
+- `.fit.gz`
+- `.gpx.gz`
+- `.tcx.gz`
+- macOS `__MACOSX/._*` resource-fork metadata if the export folder was re-zipped on a Mac
+
+The importer now recognizes gzip-compressed activity files, keeps the original compressed file as the immutable raw source, decompresses only into a temporary parser input, and ignores macOS metadata files rather than trying to parse them as activities.
+
+You can inspect an archive before importing it:
+
+```bash
+cd backend
+python scripts/inspect_activity_archive.py /path/to/activities.zip
+```
 
 ## Architecture
 
 ```text
-Strava OAuth/Webhooks        FIT / GPX / TCX / ZIP
+Strava OAuth/Webhooks       FIT / GPX / TCX / ZIP / *.gz
         |                              |
         v                              v
   Strava adapter                 Import session
@@ -43,63 +58,132 @@ Strava OAuth/Webhooks        FIT / GPX / TCX / ZIP
               stream metrics  training load
                      \          /
                       v        v
-                  Fitness analytics
+                   Athlete Context
+                         |
+             +-----------+-----------+
+             |                       |
+             v                       v
+       Training Analyst       Planning Engine
+             |                       |
+             +-----------+-----------+
+                         v
+                    AI Provider
+                         |
+                         v
+               Structured commands
+                         |
+                         v
+             Deterministic validator
+                         |
+                   pending proposal
+                         |
+                   user approves
+                         |
+                         v
+                      Calendar
 ```
 
-Large work is pushed to Celery workers through Redis when `ASYNC_TASKS=true`. For simple local development, `ASYNC_TASKS=false` executes the same task code eagerly without requiring a worker.
+Large import/sync work is pushed to Celery workers through Redis when `ASYNC_TASKS=true`. For simple local development, `ASYNC_TASKS=false` executes the same task code eagerly without requiring a worker.
 
 ## Quick start with Docker
 
-1. Copy environment values and configure a Strava application if you want Strava sync:
-
 ```bash
 export APP_SECRET='use-a-long-random-secret'
+# Optional Strava integration
 export STRAVA_CLIENT_ID='...'
 export STRAVA_CLIENT_SECRET='...'
 export STRAVA_WEBHOOK_VERIFY_TOKEN='another-random-secret'
-```
 
-2. Start the stack:
-
-```bash
 docker compose up --build
 ```
 
-- Web: http://localhost:3000
-- API: http://localhost:8000
-- API docs: http://localhost:8000/docs
+- Web: `http://localhost:3000`
+- API: `http://localhost:8000`
+- API docs: `http://localhost:8000/docs`
 
-The Docker stack contains web, API, PostgreSQL, Redis and a Celery worker.
+The stack contains Next.js, FastAPI, PostgreSQL, Redis and a Celery worker.
 
-## Strava setup
+## AI provider setup
 
-Configure the Strava application callback domain for your API host and set:
+No model credentials are required to run v0.4. The default provider is deterministic:
 
 ```env
-STRAVA_REDIRECT_URI=http://localhost:8000/api/v1/strava/callback
-STRAVA_FRONTEND_REDIRECT_URI=http://localhost:3000/imports?strava=connected
+AI_PROVIDER=local
 ```
 
-For local development, OAuth callbacks work against localhost, but Strava webhooks need a publicly reachable HTTPS endpoint. Once your API is exposed publicly, create the application's webhook subscription from the backend directory:
+This exercises the same Athlete Context, proposal, validation and approval architecture while keeping tests reproducible.
 
-```bash
-python scripts/create_strava_webhook.py https://your-api.example.com/api/v1/strava/webhook
+For a remote model, v0.4 exposes a small vendor-neutral HTTP JSON hook:
+
+```env
+AI_PROVIDER=http_json
+AI_ENDPOINT=https://your-ai-gateway.example/v1/endurance
+AI_API_KEY=...
+AI_MODEL=your-model-name
 ```
 
-Only one webhook subscription is required per Strava application. Events are routed to the correct local athlete through Strava's `owner_id`.
+The gateway receives structured context plus the deterministic draft/seed. It may return improved analysis text or plan commands. Returned commands are treated as **untrusted proposals** and must pass the deterministic validator. A provider failure falls back to the local grounded planner.
 
-Historical backfill intentionally uses the paginated `/athlete/activities` summaries instead of issuing one detailed request per historical activity. This makes importing several years of history feasible within API limits. New or updated activities arriving through webhooks use the detailed activity endpoint. Set `STRAVA_SYNC_STREAMS=true` if you also want the webhook path to retrieve detailed streams; leave it false initially to keep API usage conservative.
+## Coach workflow
+
+### Ask Coach
+
+`POST /api/v1/coach/ask`
+
+Questions are answered from structured metrics and return evidence separately. Examples:
+
+- Why am I tired this week?
+- Am I doing enough vertical?
+- Compare the last four weeks with the previous four.
+- How consistent has my plan adherence been?
+
+### Generate next week
+
+`POST /api/v1/coach/generate-week`
+
+The planner considers:
+
+- upcoming objectives
+- current training block
+- recent median weekly hours/load
+- sport distribution
+- explicit weekly time availability
+- preferred long-session/rest days
+- unavailable/max-hours constraints
+- existing planned workouts
+
+It produces a pending proposal, not calendar mutations.
+
+### Adapt this week
+
+`POST /api/v1/coach/adapt-week`
+
+The first deterministic adaptation rules protect recovery after unexpectedly large recent load, reduce low-priority volume when current-week actual + future planned load is well above recent norms, and explicitly avoid making up missed past sessions.
+
+### Apply a proposal
+
+```text
+AI/provider
+    -> commands
+    -> schema validation
+    -> ownership/lock/date/availability checks
+    -> projected-load warnings
+    -> pending AIProposal
+    -> user approval
+    -> re-validation against current calendar
+    -> atomic calendar mutations + audit
+```
 
 ## File import
 
 The Imports screen accepts:
 
-- `.fit`
-- `.gpx`
-- `.tcx`
-- `.zip` containing supported files
+- `.fit`, `.fit.gz`
+- `.gpx`, `.gpx.gz`
+- `.tcx`, `.tcx.gz`
+- `.zip` containing any supported combination, including nested folders
 
-Uploads are first staged on durable storage, then queued. ZIP entries are validated for path traversal, excessive file counts and decompressed size before parsing. One malformed activity does not fail the whole archive.
+ZIP entries are checked for traversal, excessive member count, decompressed size and oversized individual files. One malformed activity does not fail the whole archive. Raw files are stored under an athlete-scoped path so identical file hashes from different SaaS tenants do not share provenance records.
 
 ## Metrics implemented
 
@@ -110,39 +194,33 @@ Training load uses the best available deterministic method:
 3. HR TRIMP-like load + resting/max HR
 4. duration/session-RPE fallback
 
-Stream enrichment currently calculates:
+Stream enrichment currently calculates normalized power, power-zone time, HR-zone time, aerobic decoupling and a first mountain mechanical-load estimate. Fitness/fatigue/form and future projections are deterministic and versioned.
 
-- normalized power from approximately 1 Hz power streams
-- power-zone seconds against the threshold valid on the activity date
-- HR-zone seconds against the threshold HR valid on the activity date
-- aerobic decoupling using power/HR, falling back to speed/HR
-- mountain mechanical load with descent weighted more heavily than ascent
-
-Metric details and confidence are persisted alongside the metric version so later formulas can be reprocessed and audited.
-
-## Useful API endpoints
+## Main v0.4 API endpoints
 
 ```text
-GET  /api/v1/health
-GET  /api/v1/activities
-POST /api/v1/imports/files
-GET  /api/v1/imports
-GET  /api/v1/imports/{id}
+GET  /api/v1/coach/context
+GET  /api/v1/coach/profile
+PUT  /api/v1/coach/profile
+POST /api/v1/coach/ask
+GET  /api/v1/coach/messages
+POST /api/v1/coach/generate-week
+POST /api/v1/coach/adapt-week
+GET  /api/v1/coach/proposals
+POST /api/v1/coach/proposals/{id}/approve
+POST /api/v1/coach/proposals/{id}/reject
+GET  /api/v1/planned-workouts/{id}/why
 
-GET  /api/v1/strava/connect
-GET  /api/v1/strava/callback
-GET  /api/v1/strava/status
-POST /api/v1/strava/sync
-POST /api/v1/strava/disconnect
-GET  /api/v1/strava/webhook
-POST /api/v1/strava/webhook
-
-GET  /api/v1/analytics/fitness
-GET  /api/v1/analytics/weekly
 GET  /api/v1/calendar
-GET  /api/v1/objectives
-POST /api/v1/objectives
+GET  /api/v1/analytics/projection
+POST /api/v1/matching/auto
 POST /api/v1/planned-workouts
+PATCH /api/v1/planned-workouts/{id}
+
+POST /api/v1/imports/files
+GET  /api/v1/imports/{id}
+GET  /api/v1/strava/connect
+POST /api/v1/strava/sync
 ```
 
 ## Tests
@@ -153,34 +231,21 @@ From `backend/`:
 pytest -q
 ```
 
-The current suite covers base load formulas, fitness EWMA, stream normalized power, zones, decoupling and signed OAuth state round-tripping.
+v0.4 adds tests for grounded fatigue analysis, structured week generation, unavailable-day handling, AI command schema validation, and Strava-style gzip archive discovery/macOS metadata filtering, in addition to the existing load, fitness, stream, OAuth and planning tests.
 
-## Important limitations / next slice
+## Still intentionally missing
 
-This is still an implementation foundation, not a complete training product. The next high-value slice should be the planning engine:
+v0.4 is the first adaptive-coach slice, not a finished SaaS. High-value next work includes:
 
-- real drag/drop training calendar
-- structured workout builder
-- plan-vs-actual matching
-- future fitness/fatigue/form projections
-- objective and block editor
-- planning constraints and validation
-- athlete context builder for the later AI coach
+- richer athlete model and automatically inferred threshold history
+- running GAP, pace zones and efficiency trends
+- cycling power curve / best efforts / FTP history
+- sport-specific fitness and calibrated cross-sport transfer
+- better trail/downhill mechanical-load model
+- richer plan adherence and missed-workout semantics
+- full-season hierarchical generation (blocks -> weekly targets -> weeks -> workouts)
+- custom AI-generated chart queries
+- production authentication and tenant identity instead of the current demo athlete helper
+- Alembic migrations, S3-compatible storage, GDPR workflows, observability and billing
 
-The AI layer should still come after those deterministic planning primitives exist.
-
-
-## v0.3 planning slice
-
-The third vertical slice turns the analytics foundation into an interactive planner:
-
-- Weekly calendar with planned and actual sessions in one view.
-- Drag planned workouts between days; locked workouts are protected.
-- Deterministic planned-load estimates from duration and workout intensity.
-- Automatic planned-vs-actual matching with transparent confidence scoring.
-- Season objectives and training blocks.
-- Future fitness, fatigue, and form projection driven by planned load.
-- Explainable warnings for abrupt weekly load increases and stacked key sessions.
-- Plan-change audit history and persisted planning constraints, ready for the AI command layer.
-
-The AI coach is intentionally not allowed to mutate the plan yet. v0.3 provides the validated planning primitives that the next AI orchestration layer can call safely.
+The product specification remains in `docs/product-requirements.docx`.

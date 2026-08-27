@@ -21,3 +21,18 @@
 ## v0.1.0 - Data foundation
 
 - Initial canonical activity model, FIT/GPX/TCX/ZIP import, training load, fitness/fatigue/form, and basic frontend.
+
+## v0.4.0 - Grounded AI coach and Strava archive hardening
+
+- Added Athlete Context aggregation over derived training metrics, thresholds, objectives, blocks, constraints, preferences and plan state.
+- Added persistent Ask Coach endpoint and UI with evidence-backed deterministic analysis plus optional remote-provider synthesis.
+- Added weekly plan generation and current-week adaptation.
+- Added AIProposal persistence, structured plan commands, deterministic validation, approve/reject flow and re-validation at apply time.
+- Added AI-initiated plan audit records and workout locking enforcement.
+- Added "Why this session?" explanations with objective/block and recent-comparable-session context.
+- Added coach preferences for weekly availability, long day, rest day and doubles.
+- Added local and vendor-neutral HTTP JSON AI provider adapters.
+- Added `.fit.gz`, `.gpx.gz` and `.tcx.gz` ingestion for Strava bulk exports.
+- Added macOS `__MACOSX` / `._*` filtering so resource forks are not misread as activities.
+- Scoped raw file storage by athlete for safer future SaaS multi-tenancy.
+- Added archive inspection utility and expanded the backend suite to 20 tests.

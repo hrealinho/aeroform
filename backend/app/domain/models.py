@@ -55,11 +55,12 @@ class ImportSession(Base):
 
 class RawActivityFile(Base):
     __tablename__ = "raw_activity_files"
+    __table_args__ = (UniqueConstraint("athlete_id", "storage_key", name="uq_athlete_raw_storage"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     athlete_id: Mapped[int] = mapped_column(ForeignKey("athletes.id"), index=True)
     import_session_id: Mapped[int | None] = mapped_column(ForeignKey("import_sessions.id"), nullable=True)
     filename: Mapped[str] = mapped_column(String(500))
-    storage_key: Mapped[str] = mapped_column(String(1000), unique=True)
+    storage_key: Mapped[str] = mapped_column(String(1000))
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     parser_version: Mapped[str] = mapped_column(String(32), default="v0.1")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
@@ -199,6 +200,44 @@ class PlanChangeAudit(Base):
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     initiated_by: Mapped[str] = mapped_column(String(32), default="user")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class AthleteCoachProfile(Base):
+    __tablename__ = "athlete_coach_profiles"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    athlete_id: Mapped[int] = mapped_column(ForeignKey("athletes.id"), unique=True, index=True)
+    available_hours_per_week: Mapped[float | None] = mapped_column(Float, nullable=True)
+    preferred_long_day: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Monday=0
+    preferred_rest_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    doubles_allowed: Mapped[bool] = mapped_column(Boolean, default=False)
+    preferences: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AIProposal(Base):
+    __tablename__ = "ai_proposals"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    athlete_id: Mapped[int] = mapped_column(ForeignKey("athletes.id"), index=True)
+    proposal_type: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    summary: Mapped[str] = mapped_column(Text)
+    commands: Mapped[list] = mapped_column(JSON, default=list)
+    context_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    validation: Mapped[dict] = mapped_column(JSON, default=dict)
+    provider: Mapped[str] = mapped_column(String(64), default="local")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CoachMessage(Base):
+    __tablename__ = "coach_messages"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    athlete_id: Mapped[int] = mapped_column(ForeignKey("athletes.id"), index=True)
+    role: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text)
+    evidence: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
 
 
 class IntegrationConnection(Base):
