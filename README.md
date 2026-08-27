@@ -2,7 +2,7 @@
 
 Training-first endurance analytics, history ingestion and adaptive planning foundation.
 
-## v0.2 major slice
+## v0.3 major slice
 
 This version adds the first production-shaped integration and ingestion layer on top of v0.1:
 
@@ -168,3 +168,19 @@ This is still an implementation foundation, not a complete training product. The
 - athlete context builder for the later AI coach
 
 The AI layer should still come after those deterministic planning primitives exist.
+
+
+## v0.3 planning slice
+
+The third vertical slice turns the analytics foundation into an interactive planner:
+
+- Weekly calendar with planned and actual sessions in one view.
+- Drag planned workouts between days; locked workouts are protected.
+- Deterministic planned-load estimates from duration and workout intensity.
+- Automatic planned-vs-actual matching with transparent confidence scoring.
+- Season objectives and training blocks.
+- Future fitness, fatigue, and form projection driven by planned load.
+- Explainable warnings for abrupt weekly load increases and stacked key sessions.
+- Plan-change audit history and persisted planning constraints, ready for the AI command layer.
+
+The AI coach is intentionally not allowed to mutate the plan yet. v0.3 provides the validated planning primitives that the next AI orchestration layer can call safely.

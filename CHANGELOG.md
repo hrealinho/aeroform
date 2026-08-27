@@ -1,21 +1,23 @@
 # Changelog
 
-## v0.2.0
+## v0.3.0 - Planning vertical slice
 
-- Added Strava OAuth, encrypted token persistence and refresh.
-- Added paginated, rate-limit-aware historical Strava backfill.
-- Added Strava webhook processing for activity changes and deauthorization.
-- Added explicit Strava disconnect/revoke flow.
-- Added Celery/Redis worker architecture and Docker worker service.
-- Moved file/ZIP processing behind import sessions and background task dispatch.
-- Added live import progress UI.
-- Added stream-derived normalized power, HR/power zone time and aerobic decoupling.
-- Added weekly load/volume/elevation/mechanical-load analytics.
-- Added richer activity metrics visibility.
+- Added deterministic planned-workout load estimation with versioned intensity factors.
+- Added full planned-workout CRUD, lock protection, move/edit audit history, and manual matching.
+- Added automatic planned-vs-actual matching using sport, time, duration, and distance confidence scoring.
+- Added future fitness/fatigue/form projection from planned load with actual/projected separation.
+- Added explainable planning warnings for aggressive weekly load ramps and stacked key sessions.
+- Added objectives and training-block CRUD APIs and planning-constraint persistence.
+- Replaced the calendar scaffold with a working weekly planner, HTML5 drag/drop, planned-vs-actual display, workout creation, locking, deletion, auto-match, and load summaries.
+- Replaced the season scaffold with objectives, training-block creation, a season timeline, and projected fitness graph.
+- Added planning unit tests.
 
-## v0.1.0
+## v0.2.0 - Strava and async ingestion
 
-- Initial modular monolith.
-- Canonical activity model.
-- FIT/GPX/TCX/ZIP parsing.
-- Basic load, fitness/fatigue/form and objective/planning scaffolding.
+- Added Strava OAuth, encrypted token storage, history synchronization, webhook handling, and disconnect flow.
+- Added Celery/Redis asynchronous file and Strava import jobs.
+- Added richer stream metrics including normalized power, zones, aerobic decoupling, and weekly analytics.
+
+## v0.1.0 - Data foundation
+
+- Initial canonical activity model, FIT/GPX/TCX/ZIP import, training load, fitness/fatigue/form, and basic frontend.

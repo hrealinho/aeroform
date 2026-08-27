@@ -1,1 +1,2 @@
-export default function Page(){return <><h1>Season</h1><p className="muted">Objectives, training blocks and future load projection.</p><div className="card section"><h2>Season planner</h2><p>The backend already models objectives, blocks and planned workouts. This screen is intentionally scaffolded for the V1 timeline editor.</p></div></>}
+import SeasonClient from "./SeasonClient";
+export default function Page(){return <SeasonClient/>}

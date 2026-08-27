@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     strava_sync_page_size: int = 100
     strava_sync_streams: bool = False
 
-    metric_version: str = "v0.2"
+    metric_version: str = "v0.3"
     fitness_tau_days: float = 42.0
     fatigue_tau_days: float = 7.0
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

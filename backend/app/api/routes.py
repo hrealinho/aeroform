@@ -7,9 +7,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, func
 from app.core.config import settings
 from app.db.session import get_db
-from app.domain.models import Athlete, Activity, ActivityMetrics, ImportSession, Objective, PlannedWorkout, IntegrationConnection
-from app.domain.schemas import ObjectiveCreate, PlannedWorkoutCreate
+from app.domain.models import Athlete, Activity, ActivityMetrics, ImportSession, Objective, PlannedWorkout, TrainingBlock, PlanningConstraint, PlanChangeAudit, IntegrationConnection
+from app.domain.schemas import ObjectiveCreate, TrainingBlockCreate, TrainingBlockUpdate, PlannedWorkoutCreate, PlannedWorkoutUpdate, ManualMatch, PlanningConstraintCreate
 from app.metrics.fitness import ewma_series
+from app.planning.workouts import estimate_planned_load, infer_intensity
+from app.planning.projection import project_load_series, projection_warnings, weekly_totals
+from app.planning.matching import activity_match_score
 from app.integrations.strava.client import authorization_url, exchange_code, revoke, StravaError
 from app.services.oauth_state import create_state, verify_state
 from app.services.token_crypto import encrypt_token
@@ -39,7 +42,7 @@ def dispatch(task, *args):
 
 @router.get("/health")
 def health():
-    return {"status": "ok", "version": "0.2.0", "async_tasks": settings.async_tasks}
+    return {"status": "ok", "version": "0.3.0", "async_tasks": settings.async_tasks}
 
 
 @router.get("/activities")
@@ -317,27 +320,306 @@ def list_objectives(db: Session = Depends(get_db)):
     return list(db.scalars(select(Objective).where(Objective.athlete_id == athlete.id).order_by(Objective.event_date)))
 
 
+@router.delete("/objectives/{objective_id}", status_code=204)
+def delete_objective(objective_id: int, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    obj = db.get(Objective, objective_id)
+    if not obj or obj.athlete_id != athlete.id:
+        raise HTTPException(404, "Objective not found")
+    db.delete(obj)
+    db.commit()
+
+
+@router.post("/training-blocks")
+def create_training_block(payload: TrainingBlockCreate, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    block = TrainingBlock(athlete_id=athlete.id, **payload.model_dump())
+    db.add(block)
+    db.commit()
+    db.refresh(block)
+    return block
+
+
+@router.get("/training-blocks")
+def list_training_blocks(start: date | None = None, end: date | None = None, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    stmt = select(TrainingBlock).where(TrainingBlock.athlete_id == athlete.id)
+    if start:
+        stmt = stmt.where(TrainingBlock.end_date >= start)
+    if end:
+        stmt = stmt.where(TrainingBlock.start_date <= end)
+    return list(db.scalars(stmt.order_by(TrainingBlock.start_date)))
+
+
+@router.patch("/training-blocks/{block_id}")
+def update_training_block(block_id: int, payload: TrainingBlockUpdate, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    block = db.get(TrainingBlock, block_id)
+    if not block or block.athlete_id != athlete.id:
+        raise HTTPException(404, "Training block not found")
+    values = payload.model_dump(exclude_unset=True)
+    for key, value in values.items():
+        setattr(block, key, value)
+    if block.end_date < block.start_date:
+        raise HTTPException(422, "end_date must be on or after start_date")
+    db.commit()
+    db.refresh(block)
+    return block
+
+
+@router.delete("/training-blocks/{block_id}", status_code=204)
+def delete_training_block(block_id: int, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    block = db.get(TrainingBlock, block_id)
+    if not block or block.athlete_id != athlete.id:
+        raise HTTPException(404, "Training block not found")
+    db.delete(block)
+    db.commit()
+
+
+def _workout_dict(workout: PlannedWorkout) -> dict:
+    return {
+        "id": workout.id, "athlete_id": workout.athlete_id, "block_id": workout.block_id, "objective_id": workout.objective_id,
+        "scheduled_at": workout.scheduled_at, "sport": workout.sport, "name": workout.name, "duration_s": workout.duration_s,
+        "distance_m": workout.distance_m, "elevation_m": workout.elevation_m, "projected_load": workout.projected_load,
+        "steps": workout.steps or [], "locked": workout.locked, "matched_activity_id": workout.matched_activity_id,
+        "intensity": infer_intensity(workout.steps),
+    }
+
+
+def _audit(db: Session, athlete_id: int, workout: PlannedWorkout, action: str, before: dict | None, reason: str | None = None):
+    db.add(PlanChangeAudit(
+        athlete_id=athlete_id, entity_type="planned_workout", entity_id=workout.id, action=action,
+        before_state=before, after_state=_workout_dict(workout) if action != "delete" else None, reason=reason, initiated_by="user",
+    ))
+
+
+def _validate_hard_constraints(db: Session, athlete_id: int, scheduled_at: datetime, duration_s: float | None):
+    day = scheduled_at.date()
+    constraints = db.scalars(select(PlanningConstraint).where(
+        PlanningConstraint.athlete_id == athlete_id, PlanningConstraint.enabled.is_(True),
+        PlanningConstraint.start_date <= day,
+    )).all()
+    for constraint in constraints:
+        if constraint.end_date and day > constraint.end_date:
+            continue
+        if constraint.weekdays and day.weekday() not in constraint.weekdays:
+            continue
+        value = constraint.value or {}
+        hard = value.get("hard", True)
+        if not hard:
+            continue
+        if constraint.constraint_type == "unavailable":
+            raise HTTPException(409, f"Date conflicts with unavailable period (constraint {constraint.id}).")
+        if constraint.constraint_type in {"max_daily_hours", "availability"}:
+            max_hours = value.get("max_hours")
+            if max_hours is not None and float(duration_s or 0) > float(max_hours) * 3600:
+                raise HTTPException(409, f"Workout exceeds configured {max_hours}h availability on this day.")
+
+
 @router.post("/planned-workouts")
 def create_planned(payload: PlannedWorkoutCreate, db: Session = Depends(get_db)):
     athlete = demo_athlete(db)
-    workout = PlannedWorkout(athlete_id=athlete.id, **payload.model_dump())
+    values = payload.model_dump(exclude={"intensity"})
+    if values.get("projected_load") is None:
+        estimate = estimate_planned_load(values.get("duration_s"), values.get("steps"), payload.intensity)
+        values["projected_load"] = estimate.load
+    if payload.intensity and not values.get("steps"):
+        values["steps"] = [{"type": "main", "intensity": payload.intensity, "duration_s": values.get("duration_s")} ]
+    _validate_hard_constraints(db, athlete.id, values["scheduled_at"], values.get("duration_s"))
+    workout = PlannedWorkout(athlete_id=athlete.id, **values)
     db.add(workout)
+    db.flush()
+    _audit(db, athlete.id, workout, "create", None, "Workout created")
     db.commit()
     db.refresh(workout)
-    return workout
+    return _workout_dict(workout)
+
+
+@router.get("/planned-workouts")
+def list_planned(start: datetime | None = None, end: datetime | None = None, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    stmt = select(PlannedWorkout).where(PlannedWorkout.athlete_id == athlete.id)
+    if start:
+        stmt = stmt.where(PlannedWorkout.scheduled_at >= start)
+    if end:
+        stmt = stmt.where(PlannedWorkout.scheduled_at <= end)
+    return [_workout_dict(w) for w in db.scalars(stmt.order_by(PlannedWorkout.scheduled_at))]
+
+
+@router.patch("/planned-workouts/{workout_id}")
+def update_planned(workout_id: int, payload: PlannedWorkoutUpdate, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    workout = db.get(PlannedWorkout, workout_id)
+    if not workout or workout.athlete_id != athlete.id:
+        raise HTTPException(404, "Planned workout not found")
+    before = _workout_dict(workout)
+    values = payload.model_dump(exclude_unset=True, exclude={"intensity"})
+    if workout.locked and any(k in values for k in {"scheduled_at", "sport", "duration_s", "steps"}) and payload.locked is not False:
+        raise HTTPException(409, "Workout is locked. Unlock it before changing schedule or prescription.")
+    candidate_scheduled = values.get("scheduled_at", workout.scheduled_at)
+    candidate_duration = values.get("duration_s", workout.duration_s)
+    _validate_hard_constraints(db, athlete.id, candidate_scheduled, candidate_duration)
+    for key, value in values.items():
+        setattr(workout, key, value)
+    if payload.intensity is not None:
+        workout.steps = [{"type": "main", "intensity": payload.intensity, "duration_s": workout.duration_s}]
+    if payload.projected_load is None and (any(k in values for k in {"duration_s", "steps"}) or payload.intensity is not None):
+        workout.projected_load = estimate_planned_load(workout.duration_s, workout.steps, payload.intensity).load
+    _audit(db, athlete.id, workout, "update", before, "Workout edited or moved")
+    db.commit()
+    db.refresh(workout)
+    return _workout_dict(workout)
+
+
+@router.delete("/planned-workouts/{workout_id}", status_code=204)
+def delete_planned(workout_id: int, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    workout = db.get(PlannedWorkout, workout_id)
+    if not workout or workout.athlete_id != athlete.id:
+        raise HTTPException(404, "Planned workout not found")
+    if workout.locked:
+        raise HTTPException(409, "Locked workouts cannot be deleted")
+    before = _workout_dict(workout)
+    _audit(db, athlete.id, workout, "delete", before, "Workout deleted")
+    db.delete(workout)
+    db.commit()
+
+
+@router.post("/planned-workouts/{workout_id}/match")
+def manual_match(workout_id: int, payload: ManualMatch, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    workout = db.get(PlannedWorkout, workout_id)
+    if not workout or workout.athlete_id != athlete.id:
+        raise HTTPException(404, "Planned workout not found")
+    before = _workout_dict(workout)
+    if payload.activity_id is not None:
+        activity = db.get(Activity, payload.activity_id)
+        if not activity or activity.athlete_id != athlete.id:
+            raise HTTPException(404, "Activity not found")
+        workout.matched_activity_id = activity.id
+    else:
+        workout.matched_activity_id = None
+    _audit(db, athlete.id, workout, "match", before, "Manual planned-to-actual match")
+    db.commit()
+    return _workout_dict(workout)
+
+
+@router.post("/matching/auto")
+def auto_match(start: date | None = None, end: date | None = None, threshold: float = Query(0.72, ge=0, le=1), db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    end = end or date.today()
+    start = start or end - timedelta(days=60)
+    workouts = list(db.scalars(select(PlannedWorkout).where(
+        PlannedWorkout.athlete_id == athlete.id, PlannedWorkout.matched_activity_id.is_(None),
+        PlannedWorkout.scheduled_at >= datetime.combine(start, datetime.min.time()), PlannedWorkout.scheduled_at <= datetime.combine(end, datetime.max.time()),
+    )))
+    activities = list(db.scalars(select(Activity).where(
+        Activity.athlete_id == athlete.id, Activity.start_time >= datetime.combine(start - timedelta(days=2), datetime.min.time()),
+        Activity.start_time <= datetime.combine(end + timedelta(days=2), datetime.max.time()),
+    )))
+    already_used = {w.matched_activity_id for w in db.scalars(select(PlannedWorkout).where(PlannedWorkout.athlete_id == athlete.id)) if w.matched_activity_id}
+    matches = []
+    for workout in workouts:
+        best = None
+        for activity in activities:
+            if activity.id in already_used:
+                continue
+            try:
+                result = activity_match_score(workout, activity)
+            except TypeError:
+                # SQLite can return naive datetimes even if timezone=True.
+                original_w, original_a = workout.scheduled_at, activity.start_time
+                if original_w.tzinfo and not original_a.tzinfo:
+                    activity.start_time = original_a.replace(tzinfo=original_w.tzinfo)
+                elif original_a.tzinfo and not original_w.tzinfo:
+                    workout.scheduled_at = original_w.replace(tzinfo=original_a.tzinfo)
+                result = activity_match_score(workout, activity)
+                workout.scheduled_at, activity.start_time = original_w, original_a
+            if not best or result.score > best[0].score:
+                best = (result, activity)
+        if best and best[0].score >= threshold:
+            result, activity = best
+            workout.matched_activity_id = activity.id
+            already_used.add(activity.id)
+            matches.append({"workout_id": workout.id, "activity_id": activity.id, "score": result.score, "reasons": result.reasons})
+    db.commit()
+    return {"matched": len(matches), "matches": matches}
 
 
 @router.get("/calendar")
 def calendar(start: date, end: date, db: Session = Depends(get_db)):
     athlete = demo_athlete(db)
-    activities = list(db.scalars(select(Activity).where(
+    activity_rows = db.execute(select(Activity, ActivityMetrics).outerjoin(ActivityMetrics).where(
         Activity.athlete_id == athlete.id,
         Activity.start_time >= datetime.combine(start, datetime.min.time()),
         Activity.start_time <= datetime.combine(end, datetime.max.time()),
-    ).order_by(Activity.start_time)))
+    ).order_by(Activity.start_time)).all()
     planned = list(db.scalars(select(PlannedWorkout).where(
         PlannedWorkout.athlete_id == athlete.id,
         PlannedWorkout.scheduled_at >= datetime.combine(start, datetime.min.time()),
         PlannedWorkout.scheduled_at <= datetime.combine(end, datetime.max.time()),
     ).order_by(PlannedWorkout.scheduled_at)))
-    return {"activities": activities, "planned": planned}
+    objectives = list(db.scalars(select(Objective).where(Objective.athlete_id == athlete.id, Objective.event_date >= start, Objective.event_date <= end)))
+    blocks = list(db.scalars(select(TrainingBlock).where(TrainingBlock.athlete_id == athlete.id, TrainingBlock.end_date >= start, TrainingBlock.start_date <= end)))
+    activities = [{
+        "id": a.id, "sport": a.sport, "name": a.name, "start_time": a.start_time, "duration_s": a.duration_s,
+        "distance_m": a.distance_m, "elevation_gain_m": a.elevation_gain_m, "training_load": m.training_load if m else 0,
+        "matched_workout_id": next((w.id for w in planned if w.matched_activity_id == a.id), None),
+    } for a, m in activity_rows]
+    return {"activities": activities, "planned": [_workout_dict(w) for w in planned], "objectives": objectives, "blocks": blocks}
+
+
+@router.get("/analytics/projection")
+def projection(start: date | None = None, end: date | None = None, sport: str | None = None, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    today = date.today()
+    start = start or today - timedelta(days=90)
+    end = end or today + timedelta(days=90)
+    # Warm up the EWMA with up to one year before the visible range so projections do not start from zero.
+    calculation_start = min(start, today) - timedelta(days=365)
+    stmt = select(func.date(Activity.start_time), func.sum(ActivityMetrics.training_load)).join(ActivityMetrics).where(
+        Activity.athlete_id == athlete.id, Activity.start_time >= datetime.combine(calculation_start, datetime.min.time()),
+        Activity.start_time <= datetime.combine(min(end, today), datetime.max.time()),
+    ).group_by(func.date(Activity.start_time))
+    if sport:
+        stmt = stmt.where(Activity.sport == sport)
+    actual = {date.fromisoformat(str(d)): float(load or 0) for d, load in db.execute(stmt).all()}
+    p_stmt = select(PlannedWorkout).where(
+        PlannedWorkout.athlete_id == athlete.id, PlannedWorkout.scheduled_at >= datetime.combine(calculation_start, datetime.min.time()),
+        PlannedWorkout.scheduled_at <= datetime.combine(end, datetime.max.time()),
+    )
+    if sport:
+        p_stmt = p_stmt.where(PlannedWorkout.sport == sport)
+    planned_daily = {}
+    key_sessions = []
+    for workout in db.scalars(p_stmt):
+        d = workout.scheduled_at.date()
+        planned_daily[d] = planned_daily.get(d, 0.0) + float(workout.projected_load or 0)
+        key_sessions.append((workout.scheduled_at, infer_intensity(workout.steps), float(workout.projected_load or 0)))
+    full = project_load_series(actual, planned_daily, calculation_start, end)
+    visible = [row for row in full if row["date"] >= start.isoformat()]
+    return {"series": visible, "weeks": weekly_totals(visible), "warnings": projection_warnings(visible, key_sessions)}
+
+
+@router.post("/planning-constraints")
+def create_constraint(payload: PlanningConstraintCreate, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    constraint = PlanningConstraint(athlete_id=athlete.id, **payload.model_dump())
+    db.add(constraint)
+    db.commit()
+    db.refresh(constraint)
+    return constraint
+
+
+@router.get("/planning-constraints")
+def list_constraints(db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    return list(db.scalars(select(PlanningConstraint).where(PlanningConstraint.athlete_id == athlete.id, PlanningConstraint.enabled.is_(True)).order_by(PlanningConstraint.start_date)))
+
+
+@router.get("/plan-audit")
+def plan_audit(limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    return list(db.scalars(select(PlanChangeAudit).where(PlanChangeAudit.athlete_id == athlete.id).order_by(PlanChangeAudit.created_at.desc()).limit(limit)))
+

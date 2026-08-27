@@ -174,6 +174,33 @@ class PlannedWorkout(Base):
     matched_activity_id: Mapped[int | None] = mapped_column(ForeignKey("activities.id"), nullable=True)
 
 
+class PlanningConstraint(Base):
+    __tablename__ = "planning_constraints"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    athlete_id: Mapped[int] = mapped_column(ForeignKey("athletes.id"), index=True)
+    constraint_type: Mapped[str] = mapped_column(String(64), index=True)
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    weekdays: Mapped[list] = mapped_column(JSON, default=list)
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class PlanChangeAudit(Base):
+    __tablename__ = "plan_change_audits"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    athlete_id: Mapped[int] = mapped_column(ForeignKey("athletes.id"), index=True)
+    entity_type: Mapped[str] = mapped_column(String(32))
+    entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    action: Mapped[str] = mapped_column(String(32))
+    before_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    after_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    initiated_by: Mapped[str] = mapped_column(String(32), default="user")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class IntegrationConnection(Base):
     __tablename__ = "integration_connections"
     __table_args__ = (UniqueConstraint("athlete_id", "provider", name="uq_athlete_provider_connection"),)
