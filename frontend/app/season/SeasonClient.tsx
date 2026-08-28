@@ -3,6 +3,7 @@ import {useCallback,useEffect,useMemo,useState} from "react";
 import {API} from "@/lib/api";
 import {localISODate} from "@/lib/datetime";
 import ProjectionChart from "@/components/ProjectionChart";
+import SeasonPlanner from "@/components/SeasonPlanner";
 
 type Objective={id:number;name:string;event_date:string;sport:string;priority:string;distance_m?:number;elevation_m?:number};
 type Block={id:number;name:string;block_type:string;start_date:string;end_date:string;targets:any;objective_id?:number};

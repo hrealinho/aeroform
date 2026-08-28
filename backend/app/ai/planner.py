@@ -99,7 +99,37 @@ def _template(sport: str, long_day: int) -> list[dict]:
     ]
 
 
-def generate_week_seed(context: dict, week_start: date, objective_id: int | None = None, strategy: str = "balanced") -> tuple[str, list[dict]]:
+
+# Most weeks are not part of a race build. Rather than pretending a plan exists, a
+# targetless week states its intent and derives it from current state.
+INTENT_FACTORS = {"recover": 0.62, "maintain": 1.0, "build": 1.08}
+RECOVER_FORM = -20.0
+BUILD_FORM = 0.0
+
+
+def choose_intent(context: dict) -> tuple[str, str]:
+    """Pick an intent for a week with no objective, from form and recent load.
+
+    Returns (intent, reason). Deterministic and explainable: the athlete should be able
+    to see why the week looks the way it does.
+    """
+    state = context.get("state") or {}
+    form = float(state.get("form") or 0)
+    load_7 = float(state.get("load_7d") or 0)
+    typical = float(state.get("typical_weekly_load_8w") or 0)
+
+    if form <= RECOVER_FORM:
+        return "recover", f"form is {form:.0f}, so fatigue is well ahead of fitness; this week protects recovery"
+    if typical and load_7 > typical * 1.25:
+        return "recover", f"the last 7 days carried {load_7:.0f} load against a typical {typical:.0f}; this week backs off"
+    if form >= BUILD_FORM and typical and load_7 < typical * 0.9:
+        return "build", f"form is {form:.0f} and recent load is below your norm, so there is room to add a little"
+    return "maintain", f"form is {form:.0f} and recent load is close to your norm, so this week holds steady"
+
+
+def generate_week_seed(context: dict, week_start: date, objective_id: int | None = None, strategy: str = "balanced",
+                       target_hours: float | None = None, phase: str | None = None,
+                       intent: str | None = None) -> tuple[str, list[dict]]:
     week_start = week_start - timedelta(days=week_start.weekday())
     objective = _primary_objective(context, objective_id)
     sport = _primary_sport(context, objective)
@@ -108,6 +138,8 @@ def generate_week_seed(context: dict, week_start: date, objective_id: int | None
     rest_day = profile.get("preferred_rest_day")
     block = context.get("current_block") or {}
     targets = block.get("targets") or {}
+    # An explicit per-week target from the season plan wins over anything inferred.
+    explicit_hours = float(target_hours) if target_hours else None
 
     typical_h = float(context.get("state", {}).get("typical_weekly_hours_8w") or 0)
     # A block's weekly_load target is honoured as well as weekly_hours. The Season UI
@@ -126,9 +158,25 @@ def generate_week_seed(context: dict, week_start: date, objective_id: int | None
         or profile.get("available_hours_per_week")
         or (typical_h * 1.03 if typical_h else (8 if sport == "cycling" else 6))
     )
-    phase = str(block.get("type") or "base").lower()
-    phase_factor = {"recovery": 0.7, "taper": 0.65, "peak": 0.9, "build": 1.05, "specific": 1.05}.get(phase, 1.0)
-    target_h *= phase_factor
+    phase = str(phase or block.get("type") or "base").lower()
+    phase_factor = {"foundation": 0.85, "recovery": 0.7, "taper": 0.65, "peak": 0.9, "build": 1.05, "specific": 1.05}.get(phase, 1.0)
+    intent_reason = None
+    if explicit_hours:
+        # The season plan has already applied phase shaping and recovery weeks, so the
+        # phase factor must not be applied a second time.
+        target_h = explicit_hours
+    elif not objective and not block:
+        # No race and no block: this is a general-fitness week, shaped by current state
+        # rather than by a phase it is not in.
+        chosen = intent if intent in INTENT_FACTORS else None
+        if chosen is None:
+            chosen, intent_reason = choose_intent(context)
+        else:
+            intent_reason = f"requested a {chosen} week"
+        target_h *= INTENT_FACTORS[chosen]
+        phase = chosen
+    else:
+        target_h *= phase_factor
     if profile.get("available_hours_per_week"):
         target_h = min(target_h, float(profile["available_hours_per_week"]))
 
@@ -193,9 +241,62 @@ def generate_week_seed(context: dict, week_start: date, objective_id: int | None
     estimated_load = sum(estimate_planned_load(c.get("duration_s"), c.get("steps"), c.get("intensity")).load for c in commands)
     total_hours = sum(float(c.get("duration_s") or 0) for c in commands) / 3600
     objective_text = f" toward {objective['name']}" if objective else ""
+    if intent_reason:
+        objective_text = f" as a {phase} week: {intent_reason}"
     summary = f"Proposed {len(commands)} sessions ({total_hours:.1f} h, about {estimated_load:.0f} planned load){objective_text}. Existing workouts and hard availability constraints are preserved."
     return summary, commands
 
+
+
+def generate_block_seed(context: dict, first_week: date, weeks: int, blocks: list[dict],
+                        objective_id: int | None = None, strategy: str = "balanced") -> tuple[str, list[dict]]:
+    """Generate several weeks in one pass, each shaped by its own season-plan target.
+
+    Generating a week at a time produced a sequence of unrelated weeks: each one
+    re-derived its target from the same 8-week median, so there was no progression, no
+    recovery week and no taper. Here every week takes the target the periodisation
+    assigned it, and already-planned days are left alone.
+    """
+    from app.planning.season import week_target
+
+    first_week = first_week - timedelta(days=first_week.weekday())
+    commands: list[dict] = []
+    covered: list[str] = []
+    # `planned` grows as we go, so later weeks see the workouts earlier weeks added and
+    # do not double-book a day.
+    working = dict(context)
+    working["planned"] = list(context.get("planned") or [])
+
+    for offset in range(max(1, weeks)):
+        start = first_week + timedelta(weeks=offset)
+        target = week_target(blocks, start)
+        summary, week_commands = generate_week_seed(
+            working, start, objective_id, strategy,
+            target_hours=target.get("target_hours") if target else None,
+            phase=target.get("phase") if target else None,
+        )
+        if not week_commands:
+            continue
+        commands.extend(week_commands)
+        working["planned"] = working["planned"] + [
+            {"id": -1, "date": c["scheduled_at"][:10], "scheduled_at": c["scheduled_at"],
+             "sport": c["sport"], "name": c["name"], "duration_s": c.get("duration_s"),
+             "projected_load": 0, "intensity": c.get("intensity"), "locked": False,
+             "matched_activity_id": None}
+            for c in week_commands
+        ]
+        phase = (target or {}).get("phase", "base")
+        covered.append(f"{start.isoformat()} ({phase}{', recovery' if (target or {}).get('is_recovery') else ''})")
+
+    total_hours = sum(float(c.get("duration_s") or 0) for c in commands) / 3600
+    estimated = sum(estimate_planned_load(c.get("duration_s"), c.get("steps"), c.get("intensity")).load for c in commands)
+    summary = (
+        f"Proposed {len(commands)} sessions across {len(covered)} weeks "
+        f"({total_hours:.1f} h, about {estimated:.0f} planned load). "
+        f"Each week uses its periodised target, so progression, recovery weeks and the taper are preserved. "
+        f"Existing workouts and hard availability constraints are untouched."
+    )
+    return summary, commands
 
 def adapt_week_seed(context: dict, week_start: date) -> tuple[str, list[dict]]:
     week_start = week_start - timedelta(days=week_start.weekday())

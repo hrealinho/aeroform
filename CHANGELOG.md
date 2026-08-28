@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.7.0 - Actual planning
+
+The app could create workouts but it could not plan. Objectives, training blocks and
+workouts all existed with nothing connecting them: blocks were hand-picked with arbitrary
+dates, the planner generated one week at a time re-deriving the same target from the same
+8-week median, and a block's `weekly_load` target was read by nothing at all.
+
+### Added
+
+- **Periodisation** (`app/planning/season.py`, `POST /api/v1/coach/plan-season`). Works
+  backwards from the objective date to decide how many weeks of base, build, specific, peak
+  and taper fit, and what weekly load each week carries. Ramps from the athlete's own recent
+  load at up to 7% per week - below the projection engine's 15% spike threshold, so a plan
+  never generates its own warning - capped at 1.45x established load. Every fourth loading
+  week is a recovery week. Long objectives get a two-week taper. Short horizons collapse
+  gracefully: with three weeks left the plan is peak plus taper, not a base phase.
+  Previews by default; blocks are only created with `apply`.
+- **Multi-week generation** (`POST /api/v1/coach/generate-block`). Fills up to 16 weeks in one
+  proposal, each week shaped by its own periodised target, so progression, recovery weeks and
+  the taper survive. Later weeks see what earlier weeks scheduled and do not double-book.
+- **General-fitness weeks.** "Plan my next week" with no race and no block now states an
+  intent - recover, maintain or build - chosen from current form and recent load, and explains
+  why. Overridable explicitly. Previously a targetless week silently reused the race template.
+- **`GET /api/v1/analytics/block-progress`**: target vs planned vs actual per week for every
+  block. The one view where objective, block, calendar and completed training meet.
+
+### Fixed
+
+- A block's `targets.weekly_load` now affects the plan. The Season UI wrote it, the planner
+  read only `weekly_hours`, so the number an athlete typed in did nothing.
+- `foundation` blocks had no phase factor, so they behaved exactly like having no block.
+
+
 ## v0.6.1 - Visual identity and interface pass
 
 - **App icon.** `app/icon.svg`: a ridgeline that doubles as a load curve. Three strokes and

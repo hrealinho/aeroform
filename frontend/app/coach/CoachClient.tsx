@@ -53,9 +53,9 @@ export default function CoachClient(){
       await load();
     }catch(e:any){setError(e.message||"Coach request failed")}finally{setBusy("")}
   }
-  async function generate(){
-    setBusy("generate");setError("");
-    try{const r=await fetch(`${API}/coach/generate-week`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({strategy:"balanced"})});if(!r.ok)throw new Error(await r.text());await load()}catch(e:any){setError(e.message||"Plan generation failed")}finally{setBusy("")}
+  async function generate(intent?:string){
+    setBusy(intent?`generate-${intent}`:"generate");setError("");
+    try{const r=await fetch(`${API}/coach/generate-week`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({strategy:"balanced",intent:intent||"auto"})});if(!r.ok)throw new Error(await r.text());await load()}catch(e:any){setError(e.message||"Plan generation failed")}finally{setBusy("")}
   }
   async function adapt(){
     setBusy("adapt");setError("");
@@ -75,7 +75,10 @@ export default function CoachClient(){
   return <>
     <div className="row spread coachHeader">
       <div><h1>AI Coach</h1><p className="muted">Grounded analysis and plan changes over deterministic training metrics. Calendar changes require your approval.</p></div>
-      <div className="row"><button className="button" disabled={!!busy} onClick={generate}>{busy==="generate"?"Generating…":"Generate next week"}</button><button className="button secondary" disabled={!!busy} onClick={adapt}>{busy==="adapt"?"Analysing…":"Adapt this week"}</button></div>
+      <div className="row">
+        <button className="button" disabled={!!busy} onClick={()=>generate()}>{busy==="generate"?"Generating…":"Plan next week"}</button>
+        <button className="button secondary" disabled={!!busy} onClick={adapt}>{busy==="adapt"?"Analysing…":"Adapt this week"}</button>
+      </div>
     </div>
 
     {context&&<div className="grid section planningMetrics">
@@ -91,6 +94,11 @@ export default function CoachClient(){
         <div className="messageStack">
           {messages.length===0&&<div className="emptyCoach">Your training history stays structured. Raw FIT/GPX streams are not sent to the reasoning layer.</div>}
           {messages.map(m=><div className={`coachMessage ${m.role}`} key={m.id}><div className="messageRole">{m.role==="assistant"?"Coach":"You"}</div><div>{m.content}</div>{m.evidence?.length>0&&<div className="evidenceRow">{m.evidence.slice(0,4).map((e,i)=><span className="badge" key={i}>{e.metric}: {String(e.value)}{e.period?` · ${e.period}`:""}</span>)}</div>}</div>)}
+        </div>
+        <div className="row section">
+          <span className="muted">Or ask for a specific kind of week:</span>
+          {["recover","maintain","build"].map(i=>
+            <button key={i} disabled={!!busy} onClick={()=>generate(i)}>{busy===`generate-${i}`?"…":i}</button>)}
         </div>
         <form className="coachAsk" onSubmit={ask}><textarea className="input" rows={3} value={question} onChange={e=>setQuestion(e.target.value)} placeholder="Why is my fatigue high? Am I doing enough vertical? Compare the last four weeks with the previous four."/><button className="button" disabled={busy==="ask"}>{busy==="ask"?"Analysing…":"Ask"}</button></form>
       </section>

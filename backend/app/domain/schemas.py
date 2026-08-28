@@ -111,6 +111,8 @@ class GenerateWeekRequest(BaseModel):
     week_start: date | None = None
     objective_id: int | None = None
     strategy: str = "balanced"
+    # For a week with no race or block: auto reads current form and recent load.
+    intent: str | None = Field(default=None, pattern="^(auto|maintain|build|recover)$")
 
 
 class AdaptWeekRequest(BaseModel):
@@ -161,3 +163,19 @@ class ThresholdEstimateRequest(BaseModel):
     history_days: int = Field(default=365, ge=30, le=3650)
     persist: bool = True
     apply_to_history: bool = False
+
+
+class SeasonPlanRequest(BaseModel):
+    objective_id: int | None = None
+    start_date: date | None = None
+    # False returns a preview only. Blocks are never created without asking.
+    apply: bool = False
+    # Replace any existing blocks overlapping the horizon rather than stacking on them.
+    replace_existing: bool = True
+
+
+class GenerateBlockRequest(BaseModel):
+    week_start: date | None = None
+    weeks: int = Field(default=4, ge=1, le=16)
+    objective_id: int | None = None
+    strategy: str = "balanced"

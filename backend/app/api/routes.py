@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.core.timeutil import day_end, day_start, to_utc, utcnow
 from app.db.session import get_db
 from app.domain.models import Athlete, Activity, ActivityMetrics, ImportSession, Objective, PlannedWorkout, TrainingBlock, PlanningConstraint, PlanChangeAudit, IntegrationConnection, AthleteCoachProfile, AIProposal, CoachMessage
-from app.domain.schemas import ObjectiveCreate, TrainingBlockCreate, TrainingBlockUpdate, PlannedWorkoutCreate, PlannedWorkoutUpdate, ManualMatch, PlanningConstraintCreate, CoachProfileUpdate, CoachAsk, GenerateWeekRequest, AdaptWeekRequest, ActivityClassificationUpdate, ThresholdManualCreate, ThresholdEstimateRequest
+from app.domain.schemas import SeasonPlanRequest, GenerateBlockRequest, ObjectiveCreate, TrainingBlockCreate, TrainingBlockUpdate, PlannedWorkoutCreate, PlannedWorkoutUpdate, ManualMatch, PlanningConstraintCreate, CoachProfileUpdate, CoachAsk, GenerateWeekRequest, AdaptWeekRequest, ActivityClassificationUpdate, ThresholdManualCreate, ThresholdEstimateRequest
 from app.metrics.fitness import DEFAULT_WARMUP_DAYS, ewma_series
 from app.planning.workouts import estimate_planned_load, infer_intensity
 from app.planning.projection import project_load_series, projection_warnings, weekly_totals
@@ -28,7 +28,8 @@ from app.importers.formats import activity_format
 from app.ai.context import build_athlete_context, PLAN_HORIZON_DAYS
 from app.ai.analyst import analyse_question
 from app.ai.provider import get_provider
-from app.ai.planner import generate_week_seed, adapt_week_seed
+from app.ai.planner import generate_week_seed, adapt_week_seed, generate_block_seed
+from app.planning.season import periodise
 from app.ai.commands import validate_commands, apply_commands
 from app.ai.explain import explain_workout
 from app.services.ingestion import recalculate_activity_metrics, threshold as threshold_at
@@ -1068,7 +1069,9 @@ def coach_generate_week(payload: GenerateWeekRequest, db: Session = Depends(get_
     today = date.today()
     week_start = payload.week_start or (today + timedelta(days=(7 - today.weekday()) % 7 or 7))
     week_start = week_start - timedelta(days=week_start.weekday())
-    seed_summary, seed_commands = generate_week_seed(context, week_start, payload.objective_id, payload.strategy)
+    seed_summary, seed_commands = generate_week_seed(
+        context, week_start, payload.objective_id, payload.strategy,
+        intent=None if payload.intent in (None, "auto") else payload.intent)
     provider = get_provider()
     try:
         plan = provider.refine_plan("generate_week", context, seed_summary, seed_commands)
@@ -1089,6 +1092,205 @@ def coach_generate_week(payload: GenerateWeekRequest, db: Session = Depends(get_
     db.add(proposal); db.commit(); db.refresh(proposal)
     return _proposal_dict(proposal)
 
+
+
+def _long_objective(objective: Objective | None) -> bool:
+    """Long events need a two-week taper. Duration beats distance: a 40 km mountain
+    ultra is a longer day than a road marathon."""
+    if objective is None:
+        return False
+    if objective.expected_duration_s and objective.expected_duration_s >= 4 * 3600:
+        return True
+    if objective.sport in {"trail_running", "mountaineering"} and (objective.distance_m or 0) >= 42000:
+        return True
+    return (objective.distance_m or 0) >= 42000 or (objective.elevation_m or 0) >= 2500
+
+
+@router.post("/coach/plan-season")
+def plan_season(payload: SeasonPlanRequest, db: Session = Depends(get_db)):
+    """Derive a periodised block structure from an objective.
+
+    This is the layer between an objective and individual workouts: it decides how many
+    weeks of base, build, specific, peak and taper fit before the race, and what weekly
+    load each of those weeks should carry. Returns a preview unless apply is set.
+    """
+    athlete = demo_athlete(db)
+    context = build_athlete_context(db, athlete)
+
+    objective = None
+    if payload.objective_id is not None:
+        objective = db.get(Objective, payload.objective_id)
+        if not objective or objective.athlete_id != athlete.id:
+            raise HTTPException(404, "Objective not found")
+    else:
+        objective = db.scalar(select(Objective).where(
+            Objective.athlete_id == athlete.id, Objective.event_date >= date.today(),
+        ).order_by(Objective.priority, Objective.event_date))
+    if objective is None:
+        raise HTTPException(409, "Add an objective first: a season plan is built backwards from a race date.")
+
+    start = payload.start_date or date.today()
+    if objective.event_date <= start:
+        raise HTTPException(409, "The objective date is in the past relative to the plan start.")
+
+    state = context.get("state") or {}
+    blocks = periodise(
+        start=start, objective_date=objective.event_date,
+        typical_weekly_load=float(state.get("typical_weekly_load_8w") or 0),
+        typical_weekly_hours=float(state.get("typical_weekly_hours_8w") or 0),
+        long_objective=_long_objective(objective), objective_name=objective.name,
+    )
+    if not blocks:
+        raise HTTPException(409, "Not enough time before the objective to build a plan.")
+
+    preview = [b.as_dict() for b in blocks]
+    applied = []
+    if payload.apply:
+        horizon_start, horizon_end = blocks[0].start, blocks[-1].end
+        if payload.replace_existing:
+            # Stacking a new plan on top of an old one leaves overlapping blocks and the
+            # week planner cannot tell which target applies.
+            for existing in db.scalars(select(TrainingBlock).where(
+                TrainingBlock.athlete_id == athlete.id,
+                TrainingBlock.end_date >= horizon_start,
+                TrainingBlock.start_date <= horizon_end,
+            )):
+                db.execute(update(PlannedWorkout).where(
+                    PlannedWorkout.athlete_id == athlete.id, PlannedWorkout.block_id == existing.id,
+                ).values(block_id=None))
+                db.delete(existing)
+            db.flush()
+        for item in preview:
+            block = TrainingBlock(
+                athlete_id=athlete.id, objective_id=objective.id, name=item["name"],
+                block_type=item["block_type"],
+                start_date=date.fromisoformat(item["start_date"]),
+                end_date=date.fromisoformat(item["end_date"]),
+                targets=item["targets"],
+            )
+            db.add(block)
+            db.flush()
+            applied.append({"id": block.id, "name": block.name, "block_type": block.block_type})
+        db.add(PlanChangeAudit(
+            athlete_id=athlete.id, entity_type="season_plan", entity_id=objective.id, action="create",
+            before_state=None, after_state={"blocks": preview}, initiated_by="user",
+            reason=f"Periodised season plan for {objective.name} on {objective.event_date.isoformat()}",
+        ))
+        db.commit()
+
+    total_weeks = sum(b["weeks"] for b in preview)
+    return {
+        "objective": {"id": objective.id, "name": objective.name, "date": objective.event_date.isoformat(),
+                      "priority": objective.priority, "sport": objective.sport,
+                      "long_objective": _long_objective(objective)},
+        "start_date": blocks[0].start.isoformat(),
+        "total_weeks": total_weeks,
+        "basis": {"typical_weekly_load_8w": state.get("typical_weekly_load_8w"),
+                  "typical_weekly_hours_8w": state.get("typical_weekly_hours_8w"),
+                  "note": "Targets ramp from your own recent load, capped so the plan never generates a load-spike warning."},
+        "blocks": preview,
+        "applied": applied,
+        "method": "linear_periodisation_v1",
+    }
+
+
+@router.post("/coach/generate-block")
+def coach_generate_block(payload: GenerateBlockRequest, db: Session = Depends(get_db)):
+    """Generate several weeks of workouts at once, each using its periodised target."""
+    athlete = demo_athlete(db)
+    context = build_athlete_context(db, athlete)
+    today = date.today()
+    first = payload.week_start or (today + timedelta(days=(7 - today.weekday()) % 7 or 7))
+    first = first - timedelta(days=first.weekday())
+
+    stored_blocks = [{
+        "name": b.name, "block_type": b.block_type, "targets": b.targets or {},
+    } for b in db.scalars(select(TrainingBlock).where(
+        TrainingBlock.athlete_id == athlete.id,
+        TrainingBlock.end_date >= first,
+        TrainingBlock.start_date <= first + timedelta(weeks=payload.weeks),
+    ))]
+
+    seed_summary, seed_commands = generate_block_seed(
+        context, first, payload.weeks, stored_blocks, payload.objective_id, payload.strategy)
+    if not seed_commands:
+        raise HTTPException(409, "Nothing to propose: every day in the range is already planned or unavailable.")
+
+    validation = validate_commands(db, athlete.id, seed_commands)
+    proposal = AIProposal(
+        athlete_id=athlete.id, proposal_type="generate_block", status="pending",
+        title=f"{payload.weeks} weeks from {first.isoformat()}",
+        summary=seed_summary, commands=validation.get("commands") or seed_commands,
+        context_snapshot=_compact_context(context), validation=validation, provider="local",
+    )
+    db.add(proposal); db.commit(); db.refresh(proposal)
+    return _proposal_dict(proposal)
+
+
+@router.get("/analytics/block-progress")
+def block_progress(db: Session = Depends(get_db)):
+    """Target vs planned vs actual, per week, for every block in the horizon.
+
+    The one view where objective, block, plan and completed training meet. Without it a
+    block's targets were unverifiable: nothing compared what was prescribed with what
+    was scheduled or what actually happened.
+    """
+    athlete = demo_athlete(db)
+    today = date.today()
+    blocks = list(db.scalars(select(TrainingBlock).where(
+        TrainingBlock.athlete_id == athlete.id,
+        TrainingBlock.end_date >= today - timedelta(days=56),
+    ).order_by(TrainingBlock.start_date)))
+    if not blocks:
+        return {"blocks": [], "note": "No training blocks yet. Generate a season plan from an objective."}
+
+    horizon_start = min(b.start_date for b in blocks)
+    horizon_end = max(b.end_date for b in blocks)
+
+    planned_by_week: dict[str, float] = {}
+    for workout in db.scalars(select(PlannedWorkout).where(
+        PlannedWorkout.athlete_id == athlete.id,
+        PlannedWorkout.scheduled_at >= day_start(horizon_start),
+        PlannedWorkout.scheduled_at <= day_end(horizon_end),
+    )):
+        day = to_utc(workout.scheduled_at).date()
+        monday = (day - timedelta(days=day.weekday())).isoformat()
+        planned_by_week[monday] = planned_by_week.get(monday, 0.0) + float(workout.projected_load or 0)
+
+    actual_by_week: dict[str, float] = {}
+    for activity, metrics in db.execute(select(Activity, ActivityMetrics).join(ActivityMetrics).where(
+        Activity.athlete_id == athlete.id,
+        Activity.start_time >= day_start(horizon_start),
+        Activity.start_time <= day_end(min(horizon_end, today)),
+    )):
+        day = to_utc(activity.start_time).date()
+        monday = (day - timedelta(days=day.weekday())).isoformat()
+        actual_by_week[monday] = actual_by_week.get(monday, 0.0) + float(metrics.training_load or 0)
+
+    out = []
+    for block in blocks:
+        weeks = []
+        for target in ((block.targets or {}).get("week_targets") or []):
+            monday = target.get("week_start")
+            if not monday:
+                continue
+            target_load = float(target.get("target_load") or 0)
+            planned = round(planned_by_week.get(monday, 0.0), 1)
+            actual = round(actual_by_week.get(monday, 0.0), 1)
+            weeks.append({
+                **target, "planned_load": planned, "actual_load": actual,
+                "planned_vs_target_pct": round(planned / target_load * 100) if target_load else None,
+                "actual_vs_target_pct": round(actual / target_load * 100) if target_load else None,
+                "is_past": date.fromisoformat(monday) < today - timedelta(days=today.weekday()),
+            })
+        out.append({
+            "id": block.id, "name": block.name, "block_type": block.block_type,
+            "start_date": block.start_date.isoformat(), "end_date": block.end_date.isoformat(),
+            "is_current": block.start_date <= today <= block.end_date,
+            "targets": {k: v for k, v in (block.targets or {}).items() if k != "week_targets"},
+            "weeks": weeks,
+        })
+    return {"blocks": out, "as_of": today.isoformat()}
 
 @router.post("/coach/adapt-week")
 def coach_adapt_week(payload: AdaptWeekRequest, db: Session = Depends(get_db)):
