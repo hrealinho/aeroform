@@ -2,6 +2,7 @@
 
 import {useCallback, useEffect, useMemo, useState} from "react";
 import {API} from "@/lib/api";
+import {localDateTimeToUTC, localISODate, localISODateOf} from "@/lib/datetime";
 
 const SPORTS = ["running", "trail_running", "cycling", "hiking", "mountaineering", "climbing"];
 const INTENSITIES = ["recovery", "easy", "endurance", "steady", "tempo", "threshold", "vo2", "anaerobic", "race"];
@@ -14,7 +15,7 @@ type CalendarData = {planned:Planned[]; activities:Activity[]; objectives:Object
 
 type Projection = {warnings:{code:string;severity:string;message:string}[]; weeks:{week:string;load:number;planned_load:number;actual_load:number}[]};
 
-function isoDate(d: Date){return d.toISOString().slice(0,10)}
+const isoDate=localISODate;
 function mondayFor(d:Date){const x=new Date(d);const day=(x.getDay()+6)%7;x.setDate(x.getDate()-day);x.setHours(12,0,0,0);return x}
 function hours(s?:number){return s ? `${Math.round(s/360)/10}h` : ""}
 function km(m?:number){return m ? `${Math.round(m/100)/10} km` : ""}
@@ -30,17 +31,19 @@ export default function CalendarClient(){
   const [form,setForm]=useState({date:isoDate(new Date()),time:"18:00",sport:"running",name:"Easy run",durationMin:"60",distanceKm:"",elevationM:"",intensity:"easy",warmupMin:"",reps:"",workMin:"",recoveryMin:"",cooldownMin:""});
   const days=useMemo(()=>Array.from({length:7},(_,i)=>{const d=new Date(week);d.setDate(d.getDate()+i);return d}),[week]);
   const start=isoDate(days[0]); const end=isoDate(days[6]);
+  const fetchStart=useMemo(()=>{const d=new Date(days[0]);d.setDate(d.getDate()-1);return isoDate(d)},[days]);
+  const fetchEnd=useMemo(()=>{const d=new Date(days[6]);d.setDate(d.getDate()+1);return isoDate(d)},[days]);
 
   const load=useCallback(async()=>{
     setLoading(true);setError("");
     try{
       const [cal,proj]=await Promise.all([
-        fetch(`${API}/calendar?start=${start}&end=${end}`).then(r=>r.ok?r.json():Promise.reject(new Error("Calendar request failed"))),
-        fetch(`${API}/analytics/projection?start=${start}&end=${end}`).then(r=>r.ok?r.json():Promise.reject(new Error("Projection request failed")))
+        fetch(`${API}/calendar?start=${fetchStart}&end=${fetchEnd}`).then(r=>r.ok?r.json():Promise.reject(new Error("Calendar request failed"))),
+        fetch(`${API}/analytics/projection?start=${fetchStart}&end=${fetchEnd}`).then(r=>r.ok?r.json():Promise.reject(new Error("Projection request failed")))
       ]);
       setData(cal);setProjection(proj);
     }catch(e:any){setError(e.message||"Failed to load calendar")}finally{setLoading(false)}
-  },[start,end]);
+  },[fetchStart,fetchEnd]);
   useEffect(()=>{load()},[load]);
 
   async function createWorkout(e:React.FormEvent){
@@ -54,7 +57,7 @@ export default function CalendarClient(){
       if(Number(form.cooldownMin||0)>0)steps.push({type:"cooldown",intensity:"easy",duration_s:Number(form.cooldownMin)*60});
     }
     const structuredDuration=structured?(Number(form.warmupMin||0)+reps*(Number(form.workMin||0)+Number(form.recoveryMin||0))+Number(form.cooldownMin||0)):Number(form.durationMin);
-    const payload={scheduled_at:`${form.date}T${form.time}:00`,sport:form.sport,name:form.name,duration_s:structuredDuration*60,distance_m:form.distanceKm?Number(form.distanceKm)*1000:null,elevation_m:form.elevationM?Number(form.elevationM):null,intensity:form.intensity,steps};
+    const payload={scheduled_at:localDateTimeToUTC(form.date,form.time),sport:form.sport,name:form.name,duration_s:structuredDuration*60,distance_m:form.distanceKm?Number(form.distanceKm)*1000:null,elevation_m:form.elevationM?Number(form.elevationM):null,intensity:form.intensity,steps};
     const r=await fetch(`${API}/planned-workouts`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
     if(!r.ok){setError(await r.text());return} await load();
   }
@@ -101,8 +104,8 @@ export default function CalendarClient(){
     <div className="weekGrid section">
       {days.map(day=>{
         const ds=isoDate(day);
-        const planned=data.planned.filter(w=>w.scheduled_at.slice(0,10)===ds);
-        const actual=data.activities.filter(a=>a.start_time.slice(0,10)===ds);
+        const planned=data.planned.filter(w=>localISODateOf(w.scheduled_at)===ds);
+        const actual=data.activities.filter(a=>localISODateOf(a.start_time)===ds);
         const objective=data.objectives.filter(o=>o.event_date===ds);
         const block=data.blocks.find(b=>b.start_date<=ds&&b.end_date>=ds);
         return <section className="dayColumn" key={ds} onDragOver={e=>e.preventDefault()} onDrop={e=>{const id=Number(e.dataTransfer.getData("workoutId"));if(id)moveWorkout(id,day)}}>

@@ -1,19 +1,9 @@
 from __future__ import annotations
 from datetime import datetime, date
-from enum import Enum
 from sqlalchemy import String, Integer, Float, DateTime, Date, ForeignKey, Text, JSON, UniqueConstraint, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from app.core.timeutil import utcnow
 from app.db.session import Base
-
-
-class Sport(str, Enum):
-    RUNNING = "running"
-    TRAIL_RUNNING = "trail_running"
-    CYCLING = "cycling"
-    HIKING = "hiking"
-    MOUNTAINEERING = "mountaineering"
-    CLIMBING = "climbing"
-    OTHER = "other"
 
 
 class Athlete(Base):
@@ -22,7 +12,7 @@ class Athlete(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class AthleteThreshold(Base):
@@ -49,8 +39,8 @@ class ImportSession(Base):
     duplicate_count: Mapped[int] = mapped_column(Integer, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, default=0)
     error_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class RawActivityFile(Base):
@@ -63,7 +53,7 @@ class RawActivityFile(Base):
     storage_key: Mapped[str] = mapped_column(String(1000))
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     parser_version: Mapped[str] = mapped_column(String(32), default="v0.1")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class Activity(Base):
@@ -88,7 +78,7 @@ class Activity(Base):
     rpe: Mapped[float | None] = mapped_column(Float, nullable=True)
     fingerprint: Mapped[str] = mapped_column(String(64), index=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     sources: Mapped[list[ActivitySource]] = relationship(back_populates="activity", cascade="all, delete-orphan")
     metrics: Mapped[ActivityMetrics | None] = relationship(back_populates="activity", cascade="all, delete-orphan", uselist=False)
     streams: Mapped[ActivityStreams | None] = relationship(back_populates="activity", cascade="all, delete-orphan", uselist=False)
@@ -149,7 +139,7 @@ class TrainingBlock(Base):
     __tablename__ = "training_blocks"
     id: Mapped[int] = mapped_column(primary_key=True)
     athlete_id: Mapped[int] = mapped_column(ForeignKey("athletes.id"), index=True)
-    objective_id: Mapped[int | None] = mapped_column(ForeignKey("objectives.id"), nullable=True)
+    objective_id: Mapped[int | None] = mapped_column(ForeignKey("objectives.id", ondelete="SET NULL"), nullable=True)
     name: Mapped[str] = mapped_column(String(255))
     block_type: Mapped[str] = mapped_column(String(64))
     start_date: Mapped[date] = mapped_column(Date)
@@ -161,8 +151,8 @@ class PlannedWorkout(Base):
     __tablename__ = "planned_workouts"
     id: Mapped[int] = mapped_column(primary_key=True)
     athlete_id: Mapped[int] = mapped_column(ForeignKey("athletes.id"), index=True)
-    block_id: Mapped[int | None] = mapped_column(ForeignKey("training_blocks.id"), nullable=True)
-    objective_id: Mapped[int | None] = mapped_column(ForeignKey("objectives.id"), nullable=True)
+    block_id: Mapped[int | None] = mapped_column(ForeignKey("training_blocks.id", ondelete="SET NULL"), nullable=True)
+    objective_id: Mapped[int | None] = mapped_column(ForeignKey("objectives.id", ondelete="SET NULL"), nullable=True)
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     sport: Mapped[str] = mapped_column(String(32))
     name: Mapped[str] = mapped_column(String(255))
@@ -172,7 +162,7 @@ class PlannedWorkout(Base):
     projected_load: Mapped[float | None] = mapped_column(Float, nullable=True)
     steps: Mapped[list] = mapped_column(JSON, default=list)
     locked: Mapped[bool] = mapped_column(Boolean, default=False)
-    matched_activity_id: Mapped[int | None] = mapped_column(ForeignKey("activities.id"), nullable=True)
+    matched_activity_id: Mapped[int | None] = mapped_column(ForeignKey("activities.id", ondelete="SET NULL"), nullable=True)
 
 
 class PlanningConstraint(Base):
@@ -185,7 +175,7 @@ class PlanningConstraint(Base):
     weekdays: Mapped[list] = mapped_column(JSON, default=list)
     value: Mapped[dict] = mapped_column(JSON, default=dict)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class PlanChangeAudit(Base):
@@ -199,7 +189,7 @@ class PlanChangeAudit(Base):
     after_state: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     initiated_by: Mapped[str] = mapped_column(String(32), default="user")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class AthleteCoachProfile(Base):
@@ -211,7 +201,7 @@ class AthleteCoachProfile(Base):
     preferred_rest_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
     doubles_allowed: Mapped[bool] = mapped_column(Boolean, default=False)
     preferences: Mapped[dict] = mapped_column(JSON, default=dict)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class AIProposal(Base):
@@ -226,7 +216,7 @@ class AIProposal(Base):
     context_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
     validation: Mapped[dict] = mapped_column(JSON, default=dict)
     provider: Mapped[str] = mapped_column(String(64), default="local")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
@@ -237,7 +227,7 @@ class CoachMessage(Base):
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text)
     evidence: Mapped[list] = mapped_column(JSON, default=list)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
 class IntegrationConnection(Base):
@@ -255,5 +245,5 @@ class IntegrationConnection(Base):
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

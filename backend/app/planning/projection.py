@@ -1,7 +1,8 @@
 from __future__ import annotations
 from datetime import date, datetime, timedelta
-from collections import defaultdict
 from typing import Iterable
+
+from app.core.config import settings
 
 
 def ewma_step(previous: float, load: float, days: float) -> float:
@@ -13,15 +14,18 @@ def project_load_series(
     planned_daily: dict[date, float],
     start: date,
     end: date,
-    fitness_days: float = 42.0,
-    fatigue_days: float = 7.0,
+    fitness_days: float | None = None,
+    fatigue_days: float | None = None,
+    today: date | None = None,
 ) -> list[dict]:
     """Build an actual + projected fitness curve.
 
     Actual load wins through today. Planned load is used only for future dates, so
     a planned session never double-counts a completed day in the projection.
     """
-    today = date.today()
+    today = today or date.today()
+    fitness_days = float(fitness_days if fitness_days is not None else settings.fitness_tau_days)
+    fatigue_days = float(fatigue_days if fatigue_days is not None else settings.fatigue_tau_days)
     fitness = 0.0
     fatigue = 0.0
     rows: list[dict] = []
@@ -81,7 +85,8 @@ def projection_warnings(rows: list[dict], key_sessions: Iterable[tuple[datetime,
         previous = load if load > 0 else previous
 
     sessions = sorted(key_sessions, key=lambda item: item[0])
-    hard = {"threshold", "vo2", "anaerobic", "race", "long"}
+    # Must match the labels infer_intensity can actually return.
+    hard = {"threshold", "vo2", "anaerobic", "race"}
     for left, right in zip(sessions, sessions[1:]):
         if left[1] in hard and right[1] in hard and (right[0] - left[0]).total_seconds() < 24 * 3600:
             warnings.append({

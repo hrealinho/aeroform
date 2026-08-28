@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from datetime import datetime
+
+from app.core.timeutil import to_utc
 
 
 @dataclass(frozen=True)
@@ -13,7 +14,9 @@ def activity_match_score(workout, activity) -> MatchScore:
     """Score a planned workout/activity pair from 0 to 1 with transparent reasons."""
     if workout.sport != activity.sport:
         return MatchScore(0.0, ["sport mismatch"])
-    seconds = abs((activity.start_time - workout.scheduled_at).total_seconds())
+    # Normalize both sides: SQLite hands back naive datetimes even for timezone-aware
+    # columns, so subtracting a stored value from a fresh one used to raise TypeError.
+    seconds = abs((to_utc(activity.start_time) - to_utc(workout.scheduled_at)).total_seconds())
     if seconds > 36 * 3600:
         return MatchScore(0.0, ["outside 36-hour matching window"])
 

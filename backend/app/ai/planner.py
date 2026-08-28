@@ -1,6 +1,5 @@
 from __future__ import annotations
 from datetime import date, datetime, time, timedelta
-from math import ceil
 
 from app.planning.workouts import estimate_planned_load
 

@@ -1,5 +1,95 @@
 # Changelog
 
+## v0.5.2 - Correctness pass on load, thresholds and the calendar
+
+### Fixed - blocking
+
+- Planned-workout create/update/delete/match returned 500 for every request: the audit
+  trail wrote a raw `datetime` into a JSON column. The whole manual calendar was unusable.
+- Stream-derived elevation gain/loss reported zero on ~1 Hz streams. The noise floor gated
+  individual point-to-point deltas, and a 1000 m/h climb only moves 0.28 m per second, so
+  every sample was discarded. The floor now gates direction reversals (peak-to-valley
+  hysteresis), making the result independent of sampling rate. Affected GPX, TCX and
+  Strava-stream imports, and therefore every terrain and composite load derived from them.
+- `apply_to_history` on threshold estimation never committed its recomputation, so the
+  backfill silently did nothing. It now runs as a Celery task that commits per activity.
+- Manual thresholds defaulted to `valid_from = today`, so an entered FTP or resting HR
+  could never apply to a stored activity. They now back-date to the first activity by
+  default, and threshold changes trigger a recomputation.
+- Threshold estimation never produced `resting_hr`, which `hr_trimp_load` requires, so
+  HR-only activities were stuck on the session-RPE fallback. Resting HR is now inferred
+  from the lowest sustained in-activity heart rate at low confidence.
+
+### Fixed - correctness
+
+- Activity fingerprints are normalized to UTC before bucketing. The same instant arriving
+  as `+02:00` from a GPX file, as `Z` from Strava, or naive after a SQLite round-trip
+  produced three different fingerprints and stored the activity three times.
+- Timestamps are timezone-aware end to end: `utcnow()` model defaults, UTC-aware query
+  bounds, and UTC normalization in the matcher. Removes the `TypeError` workaround that
+  mutated ORM attributes during auto-matching.
+- The AI command validator derives its simulation window from the commands, so workouts
+  more than 42 days out can be edited. "Outside the validated planning window" is now
+  distinct from "not found for this athlete".
+- Deleting an objective or training block detaches dependent planned workouts and blocks
+  first. Previously this violated a foreign key on Postgres and orphaned the reference on
+  SQLite. `ondelete="SET NULL"` added, and SQLite foreign keys are now enforced.
+- `/analytics/fitness` warms the EWMA over the preceding year, so a narrowed window
+  reports real fitness instead of a curve ramping from zero.
+- `FITNESS_TAU_DAYS` / `FATIGUE_TAU_DAYS` are read by the fitness and projection models.
+  They were previously dead configuration.
+- `load_kind` is validated on the query parameter. An unknown value in an empty date range
+  used to return 200 with a plausible-looking series.
+- Re-entering a manual threshold replaces the previous row instead of appending another
+  open-ended one. Added `DELETE /api/v1/thresholds/{id}`.
+- Zone totals, best-effort windows, normalized power, grade distribution and altitude
+  smoothing are all derived from the stream's own timestamps rather than assuming one
+  sample is one second.
+- Sport classification uses moving time, derived from the stream when the source omits it,
+  so a run with a long stop is no longer classified as a hike.
+- Threshold confidence is keyed on effort evidence (heart rate relative to observed max),
+  not just window length. A steady endurance ride no longer yields a high-confidence FTP.
+- Hiking and mountaineering durability coefficients now exceed trail running's, matching
+  the documented intent that these sports are driven by time on feet.
+- Malformed Strava webhooks return 200 instead of raising, so Strava stops retrying.
+- Frontend: create and drag-to-move send the same absolute-UTC instant, and all calendar
+  dates use the local calendar day rather than the UTC one.
+- Frontend: server-rendered pages call the API over `API_URL_INTERNAL`, and a failed
+  dashboard fetch is shown instead of silently rendering zeros.
+
+### Robustness
+
+- Upload staging directories are cleaned up on rejection, on failure and after import.
+- Eager (`ASYNC_TASKS=false`) task execution is offloaded so a large archive cannot block
+  the event loop.
+- Stream metrics are computed once per ingest instead of twice on the deduplication paths.
+- The Strava resume cursor is stored separately from the error log and survives
+  completion; `discovered_count` no longer double-counts pages on a resumed backfill.
+- ZIP member size limits are enforced while extracting, not just against the declared
+  header size. Archive caps lowered to 4 GB total / 200 MB per member.
+- The demo-athlete helper tolerates a concurrent first request.
+- CORS origins are configurable via `CORS_ORIGINS`.
+
+### Tests and tooling
+
+- Added HTTP-level coverage for every write endpoint - the gap that let the calendar
+  500 ship with a green suite. 34 tests to 80.
+- Added regressions for sampling-rate-independent elevation, timezone-invariant
+  fingerprints, EWMA warm-up, the threshold pipeline and the command validation window.
+- Added frontend tests for the local-calendar date helpers, plus `npm test` / `npm run typecheck`.
+- Committed `package-lock.json` and switched the frontend image to `npm ci`.
+- Single source of truth for the app version; `/health` and the OpenAPI schema agree.
+
+
+## v0.5.1 - Import/load repair
+
+- Fixed `ParsedActivity.rpe` missing from the parser DTO, which caused fallback load calculation to fail for athletes without configured thresholds.
+- Propagated RPE through canonical activities and mapped Strava `perceived_exertion` when present.
+- Fixed historical Strava backfills getting stuck in `PendingRollbackError` after a failed/duplicate flush.
+- Prevented launching a second historical Strava sync while one is already queued/processing/paused.
+- Stopped displaying unknown Strava historical elevation loss as `0 m`; unknown descent is now shown as `-`.
+- Added `--repair-zero` / `--force` metric recomputation options and copied maintenance scripts into the Docker API image.
+
 ## v0.5.0 - Sport-aware terrain load
 
 - Replaced the v0.4 mountain heuristic with transparent distance, ascent, descent and durability load dimensions.

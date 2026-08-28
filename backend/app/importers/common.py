@@ -18,5 +18,6 @@ class ParsedActivity:
     avg_power: float | None = None
     normalized_power: float | None = None
     avg_cadence: float | None = None
+    rpe: float | None = None
     streams: list[dict] = field(default_factory=list)
     source_metadata: dict = field(default_factory=dict)

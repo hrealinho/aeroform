@@ -1,8 +1,5 @@
 from pathlib import Path
 
-SUPPORTED_ACTIVITY_SUFFIXES = (".fit", ".gpx", ".tcx", ".fit.gz", ".gpx.gz", ".tcx.gz")
-
-
 def activity_format(name: str) -> tuple[str, bool] | None:
     """Return (inner extension, gzip-compressed) for a supported activity file."""
     lower = name.lower()

@@ -1,8 +1,14 @@
+from datetime import timedelta
 from pathlib import Path
+import shutil
+
+from sqlalchemy import select
+
+from app.core.timeutil import utcnow
 from app.tasks.celery_app import celery_app
 from app.db.session import SessionLocal
-from app.domain.models import ImportSession
-from app.services.ingestion import ingest_file, ingest_zip
+from app.domain.models import Activity, ImportSession
+from app.services.ingestion import ingest_file, ingest_zip, recalculate_activity_metrics
 from app.integrations.strava.sync import historical_sync, sync_activity, delete_activity_source
 
 
@@ -38,6 +44,19 @@ def process_uploaded_files(self, athlete_id: int, import_session_id: int, paths:
         return {"import_session_id": import_session_id, "status": session.status}
     finally:
         db.close()
+        # Raw files now live under the content-addressed storage path, so the upload
+        # staging directory is dead weight. Nothing else cleaned it up, so every upload
+        # leaked a copy of its files forever.
+        _cleanup_staging(paths)
+
+
+def _cleanup_staging(paths: list[str]) -> None:
+    for parent in {Path(p).parent for p in paths}:
+        try:
+            if parent.name and parent.parent.name == "staging" and parent.exists():
+                shutil.rmtree(parent, ignore_errors=True)
+        except OSError:
+            pass
 
 
 @celery_app.task(bind=True, autoretry_for=(OSError,), retry_backoff=True, max_retries=3)
@@ -67,5 +86,33 @@ def remove_strava_activity(athlete_id: int, strava_activity_id: int):
     db = SessionLocal()
     try:
         return {"deleted": delete_activity_source(db, athlete_id, strava_activity_id)}
+    finally:
+        db.close()
+
+
+@celery_app.task(bind=True)
+def recompute_athlete_metrics(self, athlete_id: int, since_days: int | None = None):
+    """Recompute stored metrics for an athlete's activities.
+
+    Used after a threshold changes: load method selection depends on which thresholds
+    were valid on each activity's date, so entering an FTP or resting HR only changes
+    historical load once the affected activities are recalculated. This runs as a task
+    because a multi-year history is far too slow to do inside a request.
+    """
+    db = SessionLocal()
+    try:
+        stmt = select(Activity).where(Activity.athlete_id == athlete_id)
+        if since_days:
+            stmt = stmt.where(Activity.start_time >= utcnow() - timedelta(days=since_days))
+        updated = failed = 0
+        for activity in db.scalars(stmt.order_by(Activity.id)):
+            try:
+                recalculate_activity_metrics(db, athlete_id, activity)
+                db.commit()
+                updated += 1
+            except Exception:
+                db.rollback()
+                failed += 1
+        return {"athlete_id": athlete_id, "recomputed": updated, "failed": failed}
     finally:
         db.close()

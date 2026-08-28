@@ -7,6 +7,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       ASYNC_TASKS: "true"
       APP_SECRET: ${APP_SECRET:-change-me-in-production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       STRAVA_CLIENT_ID: ${STRAVA_CLIENT_ID:-}
       STRAVA_CLIENT_SECRET: ${STRAVA_CLIENT_SECRET:-}
       STRAVA_REDIRECT_URI: ${STRAVA_REDIRECT_URI:-http://localhost:8000/api/v1/strava/callback}
@@ -14,7 +15,7 @@ services:
       STRAVA_WEBHOOK_VERIFY_TOKEN: ${STRAVA_WEBHOOK_VERIFY_TOKEN:-change-me}
       STRAVA_SYNC_STREAMS: ${STRAVA_SYNC_STREAMS:-false}
       AI_PROVIDER: ${AI_PROVIDER:-local}
-      AI_MODEL: ${AI_MODEL:-endurance-planner-v0.4}
+      AI_MODEL: ${AI_MODEL:-endurance-planner-v0.5}
       AI_ENDPOINT: ${AI_ENDPOINT:-}
       AI_API_KEY: ${AI_API_KEY:-}
     volumes:
@@ -36,13 +37,21 @@ services:
       STRAVA_FRONTEND_REDIRECT_URI: ${STRAVA_FRONTEND_REDIRECT_URI:-http://localhost:3000/imports?strava=connected}
       STRAVA_WEBHOOK_VERIFY_TOKEN: ${STRAVA_WEBHOOK_VERIFY_TOKEN:-change-me}
       STRAVA_SYNC_STREAMS: ${STRAVA_SYNC_STREAMS:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-local}
+      AI_MODEL: ${AI_MODEL:-endurance-planner-v0.5}
+      AI_ENDPOINT: ${AI_ENDPOINT:-}
+      AI_API_KEY: ${AI_API_KEY:-}
     volumes:
       - rawdata:/data/raw
     depends_on: [db, redis]
   web:
     build: ./frontend
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+      # Browser-side: reachable from the host.
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000/api/v1}
+      # Server-side (React server components): inside the container, localhost is the web
+      # container itself, so server rendering must call the api service by name.
+      API_URL_INTERNAL: http://api:8000/api/v1
     ports: ["3000:3000"]
     depends_on: [api]
   db:

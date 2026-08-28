@@ -3,8 +3,11 @@ import zipfile
 from app.importers.formats import activity_format
 
 MAX_FILES = 20000
-MAX_UNCOMPRESSED_BYTES = 20 * 1024 * 1024 * 1024
-MAX_SINGLE_FILE_BYTES = 500 * 1024 * 1024
+# Header-declared sizes come from the archive producer and cannot be trusted, so these
+# are a cheap first filter only; extract_member enforces the real limit while writing.
+MAX_UNCOMPRESSED_BYTES = 4 * 1024 * 1024 * 1024
+MAX_SINGLE_FILE_BYTES = 200 * 1024 * 1024
+COPY_CHUNK_BYTES = 1024 * 1024
 
 
 def _normalized_path(name: str) -> PurePosixPath:
@@ -42,3 +45,22 @@ def safe_members(zip_path: str):
                 continue
             if activity_format(info.filename):
                 yield info
+
+
+def extract_member(zf: zipfile.ZipFile, info: zipfile.ZipInfo, target: str, max_bytes: int = MAX_SINGLE_FILE_BYTES) -> None:
+    """Copy one archive member to disk, enforcing the size limit as bytes are written.
+
+    safe_members can only check ``info.file_size``, which is a field in the archive that
+    a malicious producer controls. Streaming with a hard cap means a member that declares
+    1 KB and expands to gigabytes is stopped at the limit instead of filling the disk.
+    """
+    written = 0
+    with zf.open(info) as src, open(target, "wb") as dst:
+        while True:
+            chunk = src.read(COPY_CHUNK_BYTES)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > max_bytes:
+                raise ValueError(f"Archive member {info.filename!r} exceeds the {max_bytes} byte extraction limit")
+            dst.write(chunk)

@@ -71,6 +71,7 @@ def map_activity(data: dict, streams: dict[str, list] | None = None) -> ParsedAc
         avg_power=float(data["average_watts"]) if data.get("average_watts") is not None else None,
         normalized_power=float(data["weighted_average_watts"]) if data.get("weighted_average_watts") is not None else None,
         avg_cadence=float(data["average_cadence"]) if data.get("average_cadence") is not None else None,
+        rpe=float(data["perceived_exertion"]) if data.get("perceived_exertion") is not None else None,
         streams=stream_samples,
         source_metadata={
             "strava_id": str(data.get("id")),

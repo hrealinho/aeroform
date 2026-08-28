@@ -1,22 +1,5 @@
-from datetime import datetime, date, time
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-
-class ActivityOut(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-    id: int
-    sport: str
-    subtype: str | None = None
-    name: str | None = None
-    start_time: datetime
-    duration_s: float
-    distance_m: float | None = None
-    elevation_gain_m: float | None = None
-    avg_hr: float | None = None
-    avg_power: float | None = None
-    training_load: float | None = None
-    load_method: str | None = None
-    load_confidence: str | None = None
+from datetime import date, datetime
+from pydantic import BaseModel, Field, model_validator
 
 
 class ActivityClassificationUpdate(BaseModel):
@@ -160,3 +143,19 @@ class PlanCommand(BaseModel):
         if self.action == "move_workout" and self.scheduled_at is None:
             raise ValueError("move_workout requires scheduled_at")
         return self
+
+class ThresholdManualCreate(BaseModel):
+    sport: str = Field(pattern="^(global|running|trail_running|cycling|hiking|mountaineering|climbing)$")
+    metric: str = Field(pattern="^(ftp|critical_power|threshold_hr|threshold_speed_mps|max_hr|resting_hr)$")
+    value: float = Field(gt=0)
+    # Omitted valid_from back-dates to the first activity so the threshold actually
+    # applies to stored history; pass an explicit date to scope it to a period.
+    valid_from: date | None = None
+    apply_to_history: bool = True
+    recompute: bool = True
+
+
+class ThresholdEstimateRequest(BaseModel):
+    history_days: int = Field(default=365, ge=30, le=3650)
+    persist: bool = True
+    apply_to_history: bool = False

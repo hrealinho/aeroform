@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
+from app.core.timeutil import day_end, day_start, ensure_aware, to_utc
 from app.domain.models import Activity, ActivityMetrics, PlannedWorkout, PlanningConstraint, PlanChangeAudit
 from app.domain.schemas import PlanCommand
 from app.planning.workouts import estimate_planned_load, infer_intensity
@@ -30,9 +31,12 @@ def workout_dict(w: PlannedWorkout) -> dict:
 
 
 def _parse_dt(value) -> datetime | None:
-    if value is None or isinstance(value, datetime):
-        return value
-    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    """Parse to a timezone-aware datetime; naive input is treated as UTC."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return ensure_aware(value)
+    return ensure_aware(datetime.fromisoformat(str(value).replace("Z", "+00:00")))
 
 
 def _constraint_messages(db: Session, athlete_id: int, scheduled_at: datetime, duration_s: float | None) -> tuple[list[str], list[str]]:
@@ -78,12 +82,30 @@ def validate_commands(db: Session, athlete_id: int, commands: list[dict], today:
     except Exception as exc:
         return {"valid": False, "errors": [f"Invalid command schema: {exc}"], "warnings": [], "commands": []}
 
+    # The simulation window has to cover every workout the commands touch, not just the
+    # next six weeks. A fixed window silently dropped further-out workouts from
+    # `simulated`, which then reported them as "not found for this athlete".
     start = today - timedelta(days=7)
     end = today + timedelta(days=42)
+    referenced_ids = {c["workout_id"] for c in normalized if c.get("workout_id") is not None}
+    for c in normalized:
+        scheduled = _parse_dt(c.get("scheduled_at"))
+        if scheduled is not None:
+            end = max(end, to_utc(scheduled).date())
+    if referenced_ids:
+        referenced_dates = db.scalars(select(PlannedWorkout.scheduled_at).where(
+            PlannedWorkout.athlete_id == athlete_id,
+            PlannedWorkout.id.in_(referenced_ids),
+        ))
+        for value in referenced_dates:
+            day = to_utc(value).date()
+            start = min(start, day)
+            end = max(end, day)
+
     workouts = list(db.scalars(select(PlannedWorkout).where(
         PlannedWorkout.athlete_id == athlete_id,
-        PlannedWorkout.scheduled_at >= datetime.combine(start, datetime.min.time()),
-        PlannedWorkout.scheduled_at <= datetime.combine(end, datetime.max.time()),
+        PlannedWorkout.scheduled_at >= day_start(start),
+        PlannedWorkout.scheduled_at <= day_end(end),
     ).order_by(PlannedWorkout.scheduled_at)))
     current = {w.id: workout_dict(w) for w in workouts}
     simulated = deepcopy(current)
@@ -95,7 +117,7 @@ def validate_commands(db: Session, athlete_id: int, commands: list[dict], today:
             if scheduled is None:
                 errors.append(f"Command {index}: missing scheduled_at")
                 continue
-            if scheduled.date() < today:
+            if to_utc(scheduled).date() < today:
                 errors.append(f"Command {index}: AI cannot create workouts in the past")
                 continue
             duration = float(c.get("duration_s") or 0)
@@ -114,13 +136,18 @@ def validate_commands(db: Session, athlete_id: int, commands: list[dict], today:
         workout_id = c.get("workout_id")
         item = simulated.get(workout_id)
         db_item = db.get(PlannedWorkout, workout_id) if workout_id else None
-        if not db_item or db_item.athlete_id != athlete_id or item is None:
+        if not db_item or db_item.athlete_id != athlete_id:
             errors.append(f"Command {index}: workout {workout_id} was not found for this athlete")
+            continue
+        if item is None:
+            # Distinct from "not found": the workout exists but fell outside the window
+            # the projection was simulated over, so its effect cannot be validated.
+            errors.append(f"Command {index}: workout {workout_id} is outside the validated planning window ({start.isoformat()} to {end.isoformat()})")
             continue
         if db_item.locked:
             errors.append(f"Command {index}: workout {workout_id} is locked")
             continue
-        if db_item.scheduled_at.date() < today:
+        if to_utc(db_item.scheduled_at).date() < today:
             errors.append(f"Command {index}: AI cannot modify past workout {workout_id}")
             continue
         if action == "delete_workout":
@@ -134,7 +161,7 @@ def validate_commands(db: Session, athlete_id: int, commands: list[dict], today:
                 if field in c:
                     item[field] = c[field]
             scheduled = _parse_dt(item["scheduled_at"])
-            if scheduled.date() < today:
+            if to_utc(scheduled).date() < today:
                 errors.append(f"Command {index}: resulting workout date is in the past")
             hard, warn = _constraint_messages(db, athlete_id, scheduled, item.get("duration_s"))
             errors.extend(hard); soft.extend(warn)
@@ -154,8 +181,8 @@ def validate_commands(db: Session, athlete_id: int, commands: list[dict], today:
     calc_start = today - timedelta(days=90)
     actual_rows = db.execute(select(func.date(Activity.start_time), func.sum(ActivityMetrics.training_load)).join(ActivityMetrics).where(
         Activity.athlete_id == athlete_id,
-        Activity.start_time >= datetime.combine(calc_start, datetime.min.time()),
-        Activity.start_time <= datetime.combine(today, datetime.max.time()),
+        Activity.start_time >= day_start(calc_start),
+        Activity.start_time <= day_end(today),
     ).group_by(func.date(Activity.start_time))).all()
     actual = {date.fromisoformat(str(d)): float(load or 0) for d, load in actual_rows}
 
@@ -164,12 +191,12 @@ def validate_commands(db: Session, athlete_id: int, commands: list[dict], today:
         key_sessions = []
         for w in items:
             scheduled = _parse_dt(w["scheduled_at"])
-            d = scheduled.date()
+            d = to_utc(scheduled).date()
             if d > end:
                 continue
             planned_daily[d] = planned_daily.get(d, 0) + float(w.get("projected_load") or 0)
             key_sessions.append((scheduled, w.get("intensity") or "endurance", float(w.get("projected_load") or 0)))
-        rows = project_load_series(actual, planned_daily, calc_start, end)
+        rows = project_load_series(actual, planned_daily, calc_start, end, today=today)
         visible = [r for r in rows if r["date"] >= today.isoformat()]
         return visible, projection_warnings(visible, key_sessions)
 
@@ -207,7 +234,7 @@ def apply_commands(db: Session, athlete_id: int, commands: list[dict], proposal_
                 steps = [{"type": "main", "intensity": intensity, "duration_s": duration}]
             w = PlannedWorkout(
                 athlete_id=athlete_id,
-                scheduled_at=_parse_dt(c["scheduled_at"]),
+                scheduled_at=to_utc(_parse_dt(c["scheduled_at"])),
                 sport=c["sport"], name=c["name"], duration_s=duration,
                 distance_m=c.get("distance_m"), elevation_m=c.get("elevation_m"),
                 projected_load=estimate.load, steps=steps, locked=False,
@@ -229,7 +256,7 @@ def apply_commands(db: Session, athlete_id: int, commands: list[dict], proposal_
             applied.append({"id": before["id"], "deleted": True})
             continue
         if c.get("scheduled_at"):
-            w.scheduled_at = _parse_dt(c["scheduled_at"])
+            w.scheduled_at = to_utc(_parse_dt(c["scheduled_at"]))
         for field in ("sport", "name", "duration_s", "distance_m", "elevation_m", "steps", "objective_id", "block_id"):
             if field in c:
                 setattr(w, field, c[field])

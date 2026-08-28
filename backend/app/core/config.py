@@ -1,13 +1,22 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     app_name: str = "Aeroform"
+    app_version: str = "0.5.2"
     app_secret: str = "change-me-in-production"
     database_url: str = "sqlite:///./endurance_ai.db"
     storage_path: str = "./data/raw"
     redis_url: str = "redis://localhost:6379/0"
     async_tasks: bool = False
+    # Comma-separated in the environment, e.g. CORS_ORIGINS=http://localhost:3000,https://app.example
+    cors_origins_raw: str = Field(default="http://localhost:3000", alias="CORS_ORIGINS")
+
+    @property
+    def cors_origins(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins_raw.split(",") if o.strip()]
+
 
     strava_client_id: str | None = None
     strava_client_secret: str | None = None
@@ -31,7 +40,7 @@ class Settings(BaseSettings):
     metric_version: str = "v0.5"
     fitness_tau_days: float = 42.0
     fatigue_tau_days: float = 7.0
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", populate_by_name=True)
 
 
 settings = Settings()

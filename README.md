@@ -2,6 +2,18 @@
 
 Training-first endurance analytics, season planning and grounded AI coaching. The product deliberately keeps social mechanics out of the core experience: activities become private training data used for analytics, projections and adaptive planning.
 
+## v0.5.2 correctness fixes
+
+Shipped alongside the threshold/zone work described below. The headline fixes:
+
+- planned-workout writes worked at all again (the audit trail broke every calendar mutation)
+- stream-derived elevation is now independent of sampling rate; it previously reported zero
+  ascent for ~1 Hz GPX/TCX/Strava streams, which zeroed all terrain load derived from them
+- entering or estimating a threshold now actually reaches stored history
+- timestamps, deduplication and calendar dates are timezone-correct end to end
+
+See `CHANGELOG.md` for the full list.
+
 ## v0.5: sport-aware terrain load and classification
 
 v0.5 replaces the single mountain-load heuristic with a transparent multi-dimensional load profile. The primary `training_load` used by fitness/fatigue now becomes a sport-specific composite, while metabolic, mechanical, ascent, descent and durability components remain individually inspectable.
@@ -16,7 +28,7 @@ Key additions:
 - FIT sport/sub-sport mapping now distinguishes trail running from road running
 - ambiguous GPX files use conservative speed/elevation-density classification with confidence/reason metadata
 - activity classification can be manually overridden; metrics are recalculated immediately
-- GPX extensions can contribute HR/cadence; GPX/TCX elevation gain/loss is estimated from a smoothed altitude stream
+- GPX extensions can contribute HR/cadence; GPX/TCX elevation gain/loss is estimated from a smoothed altitude stream using peak-to-valley hysteresis, so the result does not depend on the device's sampling rate
 - Strava stream imports can derive elevation loss when it is absent from the summary payload
 - weekly analytics expose ascent, descent, metabolic, mechanical and durability load
 - the dashboard includes a load explorer for overall/metabolic/mechanical/ascent/descent/durability fitness curves
@@ -247,7 +259,7 @@ The metabolic load uses the best available deterministic method:
 3. HR TRIMP-like load + resting/max HR
 4. duration/session-RPE fallback
 
-Stream enrichment calculates normalized power, power-zone time, HR-zone time, aerobic decoupling, smoothed elevation gain/loss, grade distribution and vertical rates. Running/trail/hiking/mountaineering then add a versioned terrain profile with distance, ascent, descent and durability components. Fitness/fatigue/form use the composite `training_load`; each component can also be charted independently through `load_kind`.
+Stream enrichment calculates normalized power, power-zone time, HR-zone time, aerobic decoupling, smoothed elevation gain/loss, grade distribution and vertical rates. Every window and total is measured against the stream's own timestamps, so a 1 Hz FIT file and a 5-second GPX trace of the same activity agree. Running/trail/hiking/mountaineering then add a versioned terrain profile with distance, ascent, descent and durability components. Fitness/fatigue/form use the composite `training_load`; each component can also be charted independently through `load_kind`.
 
 ## Main v0.5 API endpoints
 
@@ -270,6 +282,12 @@ POST /api/v1/matching/auto
 POST /api/v1/planned-workouts
 PATCH /api/v1/planned-workouts/{id}
 
+GET  /api/v1/thresholds
+POST /api/v1/thresholds/estimate
+POST /api/v1/thresholds/manual
+DELETE /api/v1/thresholds/{id}
+POST /api/v1/thresholds/recompute
+
 POST /api/v1/imports/files
 GET  /api/v1/imports/{id}
 GET  /api/v1/strava/connect
@@ -282,6 +300,13 @@ From `backend/`:
 
 ```bash
 pytest -q
+```
+
+From `frontend/`:
+
+```bash
+npm test          # local-calendar date helpers
+npm run typecheck
 ```
 
 v0.5 includes terrain-load/classification tests in addition to tests for grounded fatigue analysis, structured week generation, unavailable-day handling, AI command schema validation, and Strava-style gzip archive discovery/macOS metadata filtering, in addition to the existing load, fitness, stream, OAuth and planning tests.
@@ -302,3 +327,60 @@ v0.4 is the first adaptive-coach slice, not a finished SaaS. High-value next wor
 - Alembic migrations, S3-compatible storage, GDPR workflows, observability and billing
 
 The product specification remains in `docs/product-requirements.docx`.
+
+## v0.5.1 repair after upgrading
+
+If v0.5 imported activities with zero/missing load because of the `ParsedActivity.rpe` bug, rebuild the containers and repair metrics:
+
+```bash
+docker compose up -d --build
+docker compose exec api python scripts/recompute_metrics.py --repair-zero
+```
+
+Historical Strava summary responses contain total elevation gain but not total elevation loss. Therefore descent is shown as unknown (`-`) until richer source data is available. For complete historical descent, upload your Strava `activities.zip`; FIT/GPX/TCX files are merged into the existing canonical activities and can fill missing elevation-loss/stream data without double-counting training.
+
+Do not start multiple Strava history syncs at the same time. v0.5.1 now returns the already-running import session instead of creating another one.
+
+## v0.5.2: automatic thresholds and training zones
+
+If manual physiology values are missing, open **Thresholds** and click **Estimate thresholds**. The estimator uses sustained efforts from activity history and stores the result as a versioned `estimated_history` threshold. Manual thresholds always take precedence.
+
+Thresholds are back-dated to the athlete's first activity by default, because a threshold only applies to activities on or after its `valid_from` - defaulting to today meant a freshly entered FTP changed nothing. Pass an explicit `valid_from` to scope one to a period instead.
+
+Initial estimation methods:
+
+- Cycling FTP: best sustained power from 20/40/60-minute maximal-mean-power windows. 20 min is discounted to 95%, 40 min to 98%, and 60 min is direct evidence.
+- Running critical power: equivalent 20/30/40-minute running-power windows, using 95%/98%/100% respectively.
+- Running threshold pace: road-running maximal mean speed over 30/45/60 minutes, discounted to 95%/98%/100%. Trail runs are excluded because terrain makes raw pace unsuitable.
+- Threshold HR: best sustained 30-minute rolling HR (20-minute fallback), guarded against implausible values relative to the highest observed HR.
+- Max HR: highest plausible observed activity HR.
+- Resting HR: median of the lowest sustained 60-second in-activity HR, clamped to 30-90 bpm.
+  Exercise files cannot give a trustworthy resting measurement, so this is published at
+  **low** confidence with an explicit caveat and is trivially overridden by a manual value.
+  It is inferred anyway because HR-based load needs *both* resting and max HR - without it
+  every heart-rate-only activity silently fell back to session-RPE load.
+
+Confidence is keyed on **effort evidence**, not window length. A best-60-minute mean only
+equals threshold if the athlete actually went near-maximal, so each estimate is graded by
+how hard the source activity's heart rate was relative to the observed maximum:
+
+| Source effort (avg HR / observed max HR) | Confidence |
+| --- | --- |
+| >= 88% and corroborated by a long window | high |
+| 80-88%, or maximal with one window | medium |
+| < 80% | low, with an explicit "lower bound" caveat |
+
+Without this, an athlete who trains steadily but never tests would get an FTP equal to
+their endurance power, which then inflates the intensity factor of every later session.
+
+Every threshold row can be removed (`DELETE /api/v1/thresholds/{id}`), and any threshold
+change queues a recomputation so stored history reflects the new value.
+
+Zones are then derived from the active threshold:
+
+- Cycling power: 7 FTP-relative Coggan-style zones.
+- Running power: 6 critical-power-relative zones.
+- HR: 7 LTHR-relative training zones.
+- Running pace: 6 threshold-speed-relative zones.
+
+These are estimates, not lab measurements. The UI exposes source and confidence and lets manual values supersede inferred values. The optional history-backfill checkbox explicitly applies the estimate to the selected lookback window and recalculates activity metrics.

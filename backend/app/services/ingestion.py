@@ -10,12 +10,13 @@ import zipfile
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from app.core.config import settings
+from app.core.timeutil import to_utc
 from app.domain.models import Activity, ActivitySource, ActivityStreams, ActivityMetrics, RawActivityFile, ImportSession, AthleteThreshold
 from app.importers.common import ParsedActivity
 from app.importers.fit import parse_fit
 from app.importers.gpx import parse_gpx
 from app.importers.tcx import parse_tcx
-from app.importers.zip_import import safe_members
+from app.importers.zip_import import extract_member, safe_members
 from app.importers.formats import activity_format, safe_basename
 from app.metrics.load import power_load, hr_trimp_load, rpe_load, terrain_load_profile, composite_training_load, LoadResult
 from app.metrics.streams import normalized_power, power_zone_seconds, hr_zone_seconds, aerobic_decoupling
@@ -56,15 +57,14 @@ def threshold(db: Session, athlete_id: int, sport: str, metric: str, at: date):
         AthleteThreshold.sport == sport,
         AthleteThreshold.metric == metric,
         AthleteThreshold.valid_from <= at,
-    ).order_by(AthleteThreshold.valid_from.desc())
-    for item in db.scalars(stmt):
-        if item.valid_until is None or item.valid_until >= at:
-            return item.value
-    return None
+    )
+    items = [item for item in db.scalars(stmt) if item.valid_until is None or item.valid_until >= at]
+    items.sort(key=lambda item: (item.valid_from, 1 if item.source == "manual" else 0), reverse=True)
+    return items[0].value if items else None
 
 
 def enrich_stream_metrics(db: Session, athlete_id: int, parsed: ParsedActivity) -> dict:
-    day = parsed.start_time.date()
+    day = to_utc(parsed.start_time).date()
     threshold_power = threshold(db, athlete_id, parsed.sport, "ftp" if parsed.sport == "cycling" else "critical_power", day)
     threshold_hr = threshold(db, athlete_id, parsed.sport, "threshold_hr", day) or threshold(db, athlete_id, "global", "threshold_hr", day)
     computed_np = normalized_power(parsed.streams)
@@ -77,10 +77,12 @@ def enrich_stream_metrics(db: Session, athlete_id: int, parsed: ParsedActivity) 
         parsed.elevation_gain_m = terrain_stream["stream_elevation_gain_m"]
     if parsed.elevation_loss_m is None and terrain_stream.get("stream_elevation_loss_m") is not None:
         parsed.elevation_loss_m = terrain_stream["stream_elevation_loss_m"]
+    if parsed.moving_time_s is None and terrain_stream.get("stream_moving_time_s"):
+        parsed.moving_time_s = terrain_stream["stream_moving_time_s"]
     return {
         "normalized_power_computed": computed_np,
-        "power_zones_s": power_zone_seconds(parsed.streams, threshold_power),
-        "hr_zones_s": hr_zone_seconds(parsed.streams, threshold_hr),
+        "power_zones_s": power_zone_seconds(parsed.streams, threshold_power, parsed.duration_s),
+        "hr_zones_s": hr_zone_seconds(parsed.streams, threshold_hr, parsed.duration_s),
         "aerobic_decoupling_pct": aerobic_decoupling(parsed.streams),
         **{k: v for k, v in terrain_stream.items() if v is not None},
     }
@@ -88,7 +90,7 @@ def enrich_stream_metrics(db: Session, athlete_id: int, parsed: ParsedActivity) 
 
 def calculate_load(db: Session, athlete_id: int, parsed: ParsedActivity):
     """Return the v0.5 composite load plus transparent component profile."""
-    day = parsed.start_time.date()
+    day = to_utc(parsed.start_time).date()
     threshold_power = threshold(db, athlete_id, parsed.sport, "ftp" if parsed.sport == "cycling" else "critical_power", day)
     resting_hr = threshold(db, athlete_id, parsed.sport, "resting_hr", day) or threshold(db, athlete_id, "global", "resting_hr", day)
     max_hr = threshold(db, athlete_id, parsed.sport, "max_hr", day) or threshold(db, athlete_id, "global", "max_hr", day)
@@ -147,12 +149,16 @@ def parsed_from_activity(activity: Activity, source_metadata: dict | None = None
         avg_power=activity.avg_power,
         normalized_power=activity.normalized_power,
         avg_cadence=activity.avg_cadence,
+        rpe=activity.rpe,
         streams=samples,
         source_metadata=source_metadata or {},
     )
 
 
 def write_metrics(db: Session, athlete_id: int, activity: Activity, parsed: ParsedActivity, stream_details: dict | None = None) -> ActivityMetrics:
+    # Callers that already ran enrich_stream_metrics pass the result in. Recomputing it
+    # here meant normalized power, both zone maps, decoupling and terrain were derived
+    # twice over the full stream on every re-sync.
     stream_details = stream_details if stream_details is not None else enrich_stream_metrics(db, athlete_id, parsed)
     # Persist any high-quality fields derived from streams.
     if activity.normalized_power is None and parsed.normalized_power is not None:
@@ -188,11 +194,23 @@ def recalculate_activity_metrics(db: Session, athlete_id: int, activity: Activit
 
 def _fill_missing(activity: Activity, parsed: ParsedActivity) -> None:
     """Merge conservatively: an integration can enrich fields but does not erase richer uploaded data."""
-    for attr in ["subtype", "name", "moving_time_s", "distance_m", "elevation_gain_m", "elevation_loss_m", "avg_hr", "max_hr", "avg_power", "normalized_power", "avg_cadence"]:
+    for attr in ["subtype", "name", "moving_time_s", "distance_m", "elevation_gain_m", "elevation_loss_m", "avg_hr", "max_hr", "avg_power", "normalized_power", "avg_cadence", "rpe"]:
         current = getattr(activity, attr)
         incoming = getattr(parsed, attr)
         if current is None and incoming is not None:
             setattr(activity, attr, incoming)
+
+
+
+def _reusable_stream_details(parsed: ParsedActivity, merged: ParsedActivity, stream_details: dict) -> dict | None:
+    """Reuse already-computed stream metrics when the merged activity has the same stream.
+
+    Returning None tells write_metrics to recompute, which is only necessary when the
+    stored activity carries a different (usually richer) stream than the incoming file.
+    """
+    if merged.streams is parsed.streams or merged.streams == parsed.streams:
+        return stream_details
+    return None
 
 
 def ingest_parsed(
@@ -206,7 +224,7 @@ def ingest_parsed(
 ):
     # Normalize sport before deduplication so a trail run and road run do not share
     # an accidental fingerprint solely because a source used a generic sport label.
-    classification = apply_classification(parsed)
+    apply_classification(parsed)
     # Source IDs are the strongest deduplication key when available.
     source = None
     if external_id:
@@ -229,7 +247,7 @@ def ingest_parsed(
         merged = parsed_from_activity(activity, parsed.source_metadata)
         if not merged.streams and parsed.streams:
             merged.streams = parsed.streams
-        write_metrics(db, athlete_id, activity, merged)
+        write_metrics(db, athlete_id, activity, merged, _reusable_stream_details(parsed, merged, stream_details))
         db.commit()
         return activity, True
 
@@ -260,7 +278,7 @@ def ingest_parsed(
         merged = parsed_from_activity(existing, parsed.source_metadata)
         if not merged.streams and parsed.streams:
             merged.streams = parsed.streams
-        write_metrics(db, athlete_id, existing, merged)
+        write_metrics(db, athlete_id, existing, merged, _reusable_stream_details(parsed, merged, stream_details))
         db.commit()
         return existing, True
 
@@ -269,7 +287,7 @@ def ingest_parsed(
         sport=parsed.sport,
         subtype=parsed.subtype,
         name=parsed.name,
-        start_time=parsed.start_time,
+        start_time=to_utc(parsed.start_time),
         duration_s=parsed.duration_s,
         moving_time_s=parsed.moving_time_s,
         distance_m=parsed.distance_m,
@@ -280,6 +298,7 @@ def ingest_parsed(
         avg_power=parsed.avg_power,
         normalized_power=parsed.normalized_power,
         avg_cadence=parsed.avg_cadence,
+        rpe=parsed.rpe,
         fingerprint=fp,
     )
     db.add(activity)
@@ -361,8 +380,7 @@ def ingest_zip(db: Session, athlete_id: int, zip_path: str, import_session: Impo
                     continue
                 compound_suffix = next((x for x in (".fit.gz", ".gpx.gz", ".tcx.gz", ".fit", ".gpx", ".tcx") if original.lower().endswith(x)), Path(original).suffix.lower())
                 target = os.path.join(tmp, f"{index}{compound_suffix}")
-                with zf.open(info) as src, open(target, "wb") as dst:
-                    shutil.copyfileobj(src, dst)
+                extract_member(zf, info, target)
                 _, duplicate = ingest_file(db, athlete_id, target, "zip", import_session.id, original_name=original)
                 if duplicate:
                     import_session.duplicate_count += 1

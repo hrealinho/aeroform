@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.importers.common import ParsedActivity
+from app.metrics.terrain import moving_time_from_streams
 
 
 @dataclass(frozen=True)
@@ -68,20 +69,25 @@ def classify_parsed(parsed: ParsedActivity) -> Classification:
     if parsed.sport in _CANONICAL - {"other"} and not ambiguous:
         return Classification(parsed.sport, parsed.subtype, "high", "canonical source sport")
 
-    duration = max(float(parsed.moving_time_s or parsed.duration_s or 0), 1.0)
+    # Speed must be based on moving time. GPX never declares it, so it is derived from
+    # the stream when available; using elapsed time made any run with a long stop look
+    # slow enough to be classified as a hike, which then changed its load weighting.
+    moving = parsed.moving_time_s or moving_time_from_streams(parsed.streams or [])
+    duration = max(float(moving or parsed.duration_s or 0), 1.0)
     distance = max(float(parsed.distance_m or 0), 0.0)
     gain = max(float(parsed.elevation_gain_m or 0), 0.0)
     km = distance / 1000.0
     speed_m_s = distance / duration if distance else 0.0
     gain_per_km = gain / km if km > 0 else 0.0
+    basis = "moving time" if moving else "elapsed time"
 
     # Conservative GPX-style heuristics. Speed separates bike/hike reasonably well;
     # elevation density only distinguishes trail from road once the trace already
     # looks like running.
     if speed_m_s >= 5.5:
-        return Classification("cycling", parsed.subtype, "medium", f"ambiguous file, average speed {speed_m_s:.1f} m/s")
+        return Classification("cycling", parsed.subtype, "medium", f"ambiguous file, average speed {speed_m_s:.1f} m/s ({basis})")
     if speed_m_s and speed_m_s <= 2.15:
-        return Classification("hiking", parsed.subtype, "medium", f"ambiguous file, average speed {speed_m_s:.1f} m/s")
+        return Classification("hiking", parsed.subtype, "medium", f"ambiguous file, average speed {speed_m_s:.1f} m/s ({basis})")
     if km >= 3 and gain_per_km >= 30:
         return Classification("trail_running", parsed.subtype, "medium", f"ambiguous run-like file, {gain_per_km:.0f} m gain/km")
     if distance > 0:

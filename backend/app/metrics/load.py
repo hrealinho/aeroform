@@ -93,11 +93,15 @@ def rpe_load(duration_s: float, rpe: float) -> LoadResult:
 # Coefficients are deliberately explicit and versioned as part of metric v0.5.
 # The scale is tuned so road running remains close to familiar metabolic-load
 # numbers while mountainous trail/hiking activities gain meaningful extra load.
+# ``hour`` is the base time-on-feet rate; ``long_hour`` is the extra rate applied to
+# every hour beyond ``long_after_h``. Hiking and mountaineering carry the highest
+# combined durability rates, matching the documented intent that these sports are
+# driven more by time on feet than by metabolic intensity.
 _TERRAIN_COEFFICIENTS = {
     "running": {"distance": 3.0, "ascent": 0.8, "descent": 1.0, "hour": 2.0, "long_after_h": 1.5, "long_hour": 4.0},
     "trail_running": {"distance": 2.5, "ascent": 2.0, "descent": 3.0, "hour": 5.0, "long_after_h": 2.0, "long_hour": 8.0},
-    "hiking": {"distance": 1.5, "ascent": 2.0, "descent": 2.5, "hour": 8.0, "long_after_h": 4.0, "long_hour": 4.0},
-    "mountaineering": {"distance": 1.4, "ascent": 2.5, "descent": 3.0, "hour": 9.0, "long_after_h": 4.0, "long_hour": 5.0},
+    "hiking": {"distance": 1.5, "ascent": 2.0, "descent": 2.5, "hour": 8.0, "long_after_h": 3.0, "long_hour": 9.0},
+    "mountaineering": {"distance": 1.4, "ascent": 2.5, "descent": 3.0, "hour": 9.0, "long_after_h": 3.0, "long_hour": 10.0},
 }
 
 
