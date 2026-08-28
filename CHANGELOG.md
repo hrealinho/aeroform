@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.7.1 - Claude as the plan refiner
+
+- **`AI_PROVIDER=anthropic`** adds a real Claude provider (`anthropic` SDK 1.2.0, `claude-opus-5`,
+  adaptive thinking, structured outputs via `messages.parse`). Set `ANTHROPIC_API_KEY` or
+  `AI_API_KEY` and it takes over from the deterministic provider.
+- The division of labour is deliberate and enforced by the system prompt: the deterministic
+  engine decides weekly volume, phase and available days; the model reshapes workout structure,
+  session spacing, intensity distribution and rationale within that envelope. It is told not to
+  invent load, threshold or zone numbers, not to add or remove sessions, and not to move work
+  onto days the seed did not offer.
+- Only a narrow context slice is sent: state, block, objectives, profile, constraints, six weeks
+  of summaries. Raw streams, full history and stored thresholds never leave the application.
+- A `stop_reason: "refusal"` is checked explicitly - it arrives as HTTP 200, not an exception -
+  and raises so the caller falls back to the validated deterministic seed.
+- Every model command is still re-validated by `validate_commands` before it can become a
+  proposal, and again on approval. Tests assert a model cannot delete a locked workout, backdate
+  a session, or bypass the fallback.
+
+
 ## v0.7.0 - Actual planning
 
 The app could create workouts but it could not plan. Objectives, training blocks and

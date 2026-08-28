@@ -15,9 +15,10 @@ services:
       STRAVA_WEBHOOK_VERIFY_TOKEN: ${STRAVA_WEBHOOK_VERIFY_TOKEN:-change-me}
       STRAVA_SYNC_STREAMS: ${STRAVA_SYNC_STREAMS:-false}
       AI_PROVIDER: ${AI_PROVIDER:-local}
-      AI_MODEL: ${AI_MODEL:-endurance-planner-v0.5}
+      AI_MODEL: ${AI_MODEL:-claude-opus-5}
       AI_ENDPOINT: ${AI_ENDPOINT:-}
       AI_API_KEY: ${AI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - rawdata:/data/raw
     ports: ["8000:8000"]
@@ -38,9 +39,10 @@ services:
       STRAVA_WEBHOOK_VERIFY_TOKEN: ${STRAVA_WEBHOOK_VERIFY_TOKEN:-change-me}
       STRAVA_SYNC_STREAMS: ${STRAVA_SYNC_STREAMS:-false}
       AI_PROVIDER: ${AI_PROVIDER:-local}
-      AI_MODEL: ${AI_MODEL:-endurance-planner-v0.5}
+      AI_MODEL: ${AI_MODEL:-claude-opus-5}
       AI_ENDPOINT: ${AI_ENDPOINT:-}
       AI_API_KEY: ${AI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - rawdata:/data/raw
     depends_on: [db, redis]

@@ -211,6 +211,26 @@ AI_PROVIDER=local
 
 This exercises the same Athlete Context, proposal, validation and approval architecture while keeping tests reproducible.
 
+### Claude
+
+```env
+AI_PROVIDER=anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+AI_MODEL=claude-opus-5
+```
+
+The deterministic engine still decides weekly volume, training phase and which days are
+available. Claude reshapes what is inside that envelope: workout structure, session spacing,
+intensity distribution and the explanation. It is instructed never to invent load or threshold
+numbers, never to add or remove sessions, and never to schedule onto a day the seed did not
+offer. Whatever it returns is re-validated before it can become a proposal, and again when you
+approve it - so a bad response degrades to the deterministic plan rather than to a bad plan.
+
+Only a narrow context slice is sent (state, block, objectives, profile, constraints, six weeks
+of summaries). Raw streams and full history never leave the application.
+
+### Vendor-neutral gateway
+
 For a remote model, v0.5 exposes a small vendor-neutral HTTP JSON hook:
 
 ```env
