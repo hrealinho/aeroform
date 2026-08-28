@@ -2,6 +2,59 @@
 
 Training-first endurance analytics, season planning and grounded AI coaching. The product deliberately keeps social mechanics out of the core experience: activities become private training data used for analytics, projections and adaptive planning.
 
+## v0.5: sport-aware terrain load and classification
+
+v0.5 replaces the single mountain-load heuristic with a transparent multi-dimensional load profile. The primary `training_load` used by fitness/fatigue now becomes a sport-specific composite, while metabolic, mechanical, ascent, descent and durability components remain individually inspectable.
+
+Key additions:
+
+- trail running and hiking load explicitly account for **distance, ascent, descent and time-on-feet**
+- descent has its own eccentric/downhill load and is weighted more strongly than ascent for trail/mountain sports
+- overall load blends metabolic and terrain stress rather than blindly adding an elevation bonus
+- road running remains primarily metabolic, with a smaller mechanical contribution
+- hiking/mountaineering down-weight very long HR-TRIMP values and give more influence to terrain/time-on-feet
+- FIT sport/sub-sport mapping now distinguishes trail running from road running
+- ambiguous GPX files use conservative speed/elevation-density classification with confidence/reason metadata
+- activity classification can be manually overridden; metrics are recalculated immediately
+- GPX extensions can contribute HR/cadence; GPX/TCX elevation gain/loss is estimated from a smoothed altitude stream
+- Strava stream imports can derive elevation loss when it is absent from the summary payload
+- weekly analytics expose ascent, descent, metabolic, mechanical and durability load
+- the dashboard includes a load explorer for overall/metabolic/mechanical/ascent/descent/durability fitness curves
+- Athlete Context and Ask Coach now include descent and mechanical-load evidence
+
+### v0.5 load model
+
+The metabolic component still uses the best available physiological method: power, HR/TRIMP, then session-RPE. Terrain-aware sports additionally calculate:
+
+```text
+distance load
+ascent load
+descent / eccentric load
+durability / time-on-feet load
+            |
+            v
+     mechanical load
+```
+
+The overall score uses explicit sport-specific blending. For example:
+
+```text
+road running   = 0.90 * metabolic + 0.18 * mechanical
+trail running  = 0.80 * metabolic + 0.40 * mechanical
+hiking         = 0.60 * metabolic + 0.65 * mechanical
+mountaineering = 0.55 * metabolic + 0.75 * mechanical
+cycling        = metabolic
+```
+
+These are **v0.5 starting coefficients**, not claims of physiological truth. Every component and blend weight is retained in metric details so the model can be validated against real histories and versioned later.
+
+If upgrading an existing local database, recalculate old activities without re-importing raw files:
+
+```bash
+cd backend
+python scripts/recompute_metrics.py
+```
+
 ## v0.4: grounded AI coach and adaptive planner
 
 v0.4 adds the first end-to-end AI planning loop on top of the v0.3 calendar and projection engine:
@@ -105,7 +158,7 @@ The stack contains Next.js, FastAPI, PostgreSQL, Redis and a Celery worker.
 
 ## AI provider setup
 
-No model credentials are required to run v0.4. The default provider is deterministic:
+No model credentials are required to run v0.5. The default provider is deterministic:
 
 ```env
 AI_PROVIDER=local
@@ -113,7 +166,7 @@ AI_PROVIDER=local
 
 This exercises the same Athlete Context, proposal, validation and approval architecture while keeping tests reproducible.
 
-For a remote model, v0.4 exposes a small vendor-neutral HTTP JSON hook:
+For a remote model, v0.5 exposes a small vendor-neutral HTTP JSON hook:
 
 ```env
 AI_PROVIDER=http_json
@@ -187,16 +240,16 @@ ZIP entries are checked for traversal, excessive member count, decompressed size
 
 ## Metrics implemented
 
-Training load uses the best available deterministic method:
+The metabolic load uses the best available deterministic method:
 
 1. normalized power + time-versioned FTP/critical power
 2. average power + threshold
 3. HR TRIMP-like load + resting/max HR
 4. duration/session-RPE fallback
 
-Stream enrichment currently calculates normalized power, power-zone time, HR-zone time, aerobic decoupling and a first mountain mechanical-load estimate. Fitness/fatigue/form and future projections are deterministic and versioned.
+Stream enrichment calculates normalized power, power-zone time, HR-zone time, aerobic decoupling, smoothed elevation gain/loss, grade distribution and vertical rates. Running/trail/hiking/mountaineering then add a versioned terrain profile with distance, ascent, descent and durability components. Fitness/fatigue/form use the composite `training_load`; each component can also be charted independently through `load_kind`.
 
-## Main v0.4 API endpoints
+## Main v0.5 API endpoints
 
 ```text
 GET  /api/v1/coach/context
@@ -231,7 +284,7 @@ From `backend/`:
 pytest -q
 ```
 
-v0.4 adds tests for grounded fatigue analysis, structured week generation, unavailable-day handling, AI command schema validation, and Strava-style gzip archive discovery/macOS metadata filtering, in addition to the existing load, fitness, stream, OAuth and planning tests.
+v0.5 includes terrain-load/classification tests in addition to tests for grounded fatigue analysis, structured week generation, unavailable-day handling, AI command schema validation, and Strava-style gzip archive discovery/macOS metadata filtering, in addition to the existing load, fitness, stream, OAuth and planning tests.
 
 ## Still intentionally missing
 

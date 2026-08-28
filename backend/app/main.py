@@ -5,6 +5,6 @@ from app.api.routes import router
 import app.domain.models  # noqa: F401
 
 Base.metadata.create_all(engine)
-app = FastAPI(title="Endurance AI API", version="0.4.0")
+app = FastAPI(title="Endurance AI API", version="0.5.0")
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:3000"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.include_router(router)

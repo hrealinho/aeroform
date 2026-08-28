@@ -1,6 +1,7 @@
 from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 from app.importers.common import ParsedActivity
+from app.metrics.terrain import terrain_stream_metrics
 
 
 SPORT_MAP = {
@@ -54,6 +55,7 @@ def map_activity(data: dict, streams: dict[str, list] | None = None) -> ParsedAc
                 "grade": value("grade_smooth"),
                 "temperature": value("temp"),
             })
+    terrain = terrain_stream_metrics(stream_samples, float(data.get("elapsed_time") or data.get("moving_time") or 0)) if stream_samples else {}
     return ParsedActivity(
         sport=sport,
         subtype=sport_type,
@@ -62,7 +64,8 @@ def map_activity(data: dict, streams: dict[str, list] | None = None) -> ParsedAc
         duration_s=float(data.get("elapsed_time") or data.get("moving_time") or 0),
         moving_time_s=float(data["moving_time"]) if data.get("moving_time") is not None else None,
         distance_m=float(data["distance"]) if data.get("distance") is not None else None,
-        elevation_gain_m=float(data["total_elevation_gain"]) if data.get("total_elevation_gain") is not None else None,
+        elevation_gain_m=float(data["total_elevation_gain"]) if data.get("total_elevation_gain") is not None else terrain.get("stream_elevation_gain_m"),
+        elevation_loss_m=terrain.get("stream_elevation_loss_m"),
         avg_hr=float(data["average_heartrate"]) if data.get("average_heartrate") is not None else None,
         max_hr=float(data["max_heartrate"]) if data.get("max_heartrate") is not None else None,
         avg_power=float(data["average_watts"]) if data.get("average_watts") is not None else None,
@@ -76,5 +79,6 @@ def map_activity(data: dict, streams: dict[str, list] | None = None) -> ParsedAc
             "commute": data.get("commute"),
             "private": data.get("private"),
             "sport_type": sport_type,
+            "classification_ambiguous": sport == "other",
         },
     )

@@ -47,7 +47,7 @@ def build_athlete_context(db: Session, athlete: Athlete, today: date | None = No
 
     daily_load: dict[date, float] = defaultdict(float)
     weekly: dict[date, dict] = {}
-    sport_28: dict[str, dict] = defaultdict(lambda: {"hours": 0.0, "distance_km": 0.0, "elevation_m": 0.0, "load": 0.0, "sessions": 0})
+    sport_28: dict[str, dict] = defaultdict(lambda: {"hours": 0.0, "distance_km": 0.0, "elevation_gain_m": 0.0, "elevation_loss_m": 0.0, "load": 0.0, "metabolic_load": 0.0, "mechanical_load": 0.0, "descent_load": 0.0, "sessions": 0})
     longest_90: dict[str, dict] = {}
     hardest_recent: list[dict] = []
     recent_activities: list[dict] = []
@@ -57,18 +57,28 @@ def build_athlete_context(db: Session, athlete: Athlete, today: date | None = No
         load = float(metrics.training_load or 0)
         daily_load[day] += load
         monday = day - timedelta(days=day.weekday())
-        b = weekly.setdefault(monday, {"week": monday.isoformat(), "load": 0.0, "hours": 0.0, "distance_km": 0.0, "elevation_m": 0.0, "sessions": 0})
+        b = weekly.setdefault(monday, {"week": monday.isoformat(), "load": 0.0, "metabolic_load": 0.0, "mechanical_load": 0.0, "descent_load": 0.0, "hours": 0.0, "distance_km": 0.0, "elevation_gain_m": 0.0, "elevation_loss_m": 0.0, "sessions": 0})
+        details = metrics.details if isinstance(metrics.details, dict) else {}
+        terrain = details.get("terrain") if isinstance(details.get("terrain"), dict) else {}
         b["load"] += load
+        b["metabolic_load"] += float(details.get("metabolic_load") or load)
+        b["mechanical_load"] += float(metrics.mechanical_load or 0)
+        b["descent_load"] += float(terrain.get("descent_load") or 0)
         b["hours"] += float(activity.duration_s or 0) / 3600
         b["distance_km"] += float(activity.distance_m or 0) / 1000
-        b["elevation_m"] += float(activity.elevation_gain_m or 0)
+        b["elevation_gain_m"] += float(activity.elevation_gain_m or 0)
+        b["elevation_loss_m"] += float(activity.elevation_loss_m or 0)
         b["sessions"] += 1
         if day >= today - timedelta(days=28):
             s = sport_28[activity.sport]
             s["hours"] += float(activity.duration_s or 0) / 3600
             s["distance_km"] += float(activity.distance_m or 0) / 1000
-            s["elevation_m"] += float(activity.elevation_gain_m or 0)
+            s["elevation_gain_m"] += float(activity.elevation_gain_m or 0)
+            s["elevation_loss_m"] += float(activity.elevation_loss_m or 0)
             s["load"] += load
+            s["metabolic_load"] += float(details.get("metabolic_load") or load)
+            s["mechanical_load"] += float(metrics.mechanical_load or 0)
+            s["descent_load"] += float(terrain.get("descent_load") or 0)
             s["sessions"] += 1
         if day >= recent_start:
             current = longest_90.get(activity.sport)
@@ -79,17 +89,20 @@ def build_athlete_context(db: Session, athlete: Athlete, today: date | None = No
                     "name": activity.name,
                     "duration_s": _round(activity.duration_s, 0),
                     "distance_km": _round((activity.distance_m or 0) / 1000),
-                    "elevation_m": _round(activity.elevation_gain_m, 0),
+                    "elevation_gain_m": _round(activity.elevation_gain_m, 0),
+                    "elevation_loss_m": _round(activity.elevation_loss_m, 0),
                     "load": _round(load),
+                    "mechanical_load": _round(metrics.mechanical_load),
+                    "descent_load": _round(terrain.get("descent_load")),
                 }
-            item = {"activity_id": activity.id, "date": day.isoformat(), "start_time": activity.start_time.isoformat(), "sport": activity.sport, "name": activity.name, "load": _round(load), "duration_h": _round((activity.duration_s or 0) / 3600), "distance_km": _round((activity.distance_m or 0) / 1000), "elevation_m": _round(activity.elevation_gain_m, 0)}
+            item = {"activity_id": activity.id, "date": day.isoformat(), "start_time": activity.start_time.isoformat(), "sport": activity.sport, "name": activity.name, "load": _round(load), "metabolic_load": _round(details.get("metabolic_load") or load), "mechanical_load": _round(metrics.mechanical_load), "descent_load": _round(terrain.get("descent_load")), "duration_h": _round((activity.duration_s or 0) / 3600), "distance_km": _round((activity.distance_m or 0) / 1000), "elevation_gain_m": _round(activity.elevation_gain_m, 0), "elevation_loss_m": _round(activity.elevation_loss_m, 0)}
             hardest_recent.append(item)
             if day >= today - timedelta(days=14):
                 recent_activities.append(item)
 
     fitness_rows = ewma_series(daily_load, history_start, today)
     state = fitness_rows[-1] if fitness_rows else {"fitness": 0, "fatigue": 0, "form": 0, "load": 0}
-    week_rows = [{**v, "load": _round(v["load"]), "hours": _round(v["hours"]), "distance_km": _round(v["distance_km"]), "elevation_m": _round(v["elevation_m"], 0)} for _, v in sorted(weekly.items())]
+    week_rows = [{**v, "load": _round(v["load"]), "metabolic_load": _round(v["metabolic_load"]), "mechanical_load": _round(v["mechanical_load"]), "descent_load": _round(v["descent_load"]), "hours": _round(v["hours"]), "distance_km": _round(v["distance_km"]), "elevation_gain_m": _round(v["elevation_gain_m"], 0), "elevation_loss_m": _round(v["elevation_loss_m"], 0), "elevation_m": _round(v["elevation_gain_m"], 0)} for _, v in sorted(weekly.items())]
     completed_weeks = [w for w in week_rows if date.fromisoformat(w["week"]) < today - timedelta(days=today.weekday())]
     recent_completed = completed_weeks[-8:]
     typical_weekly_load = median([w["load"] for w in recent_completed]) if recent_completed else 0.0
@@ -169,8 +182,9 @@ def build_athlete_context(db: Session, athlete: Athlete, today: date | None = No
     min_date, max_date, activity_count = db.execute(select(func.min(Activity.start_time), func.max(Activity.start_time), func.count(Activity.id)).where(Activity.athlete_id == athlete.id)).one()
 
     for data in sport_28.values():
-        for key in ("hours", "distance_km", "elevation_m", "load"):
-            data[key] = _round(data[key], 0 if key == "elevation_m" else 1)
+        for key in ("hours", "distance_km", "elevation_gain_m", "elevation_loss_m", "load", "metabolic_load", "mechanical_load", "descent_load"):
+            data[key] = _round(data[key], 0 if key in {"elevation_gain_m", "elevation_loss_m"} else 1)
+        data["elevation_m"] = data["elevation_gain_m"]
     hardest_recent = sorted(hardest_recent, key=lambda x: x["load"], reverse=True)[:5]
 
     return {

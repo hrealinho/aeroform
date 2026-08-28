@@ -17,8 +17,10 @@ from app.importers.gpx import parse_gpx
 from app.importers.tcx import parse_tcx
 from app.importers.zip_import import safe_members
 from app.importers.formats import activity_format, safe_basename
-from app.metrics.load import power_load, hr_trimp_load, rpe_load, mountain_mechanical_load
+from app.metrics.load import power_load, hr_trimp_load, rpe_load, terrain_load_profile, composite_training_load, LoadResult
 from app.metrics.streams import normalized_power, power_zone_seconds, hr_zone_seconds, aerobic_decoupling
+from app.metrics.terrain import terrain_stream_metrics
+from app.services.classification import apply_classification
 from app.services.dedup import activity_fingerprint
 
 PARSERS = {".fit": parse_fit, ".gpx": parse_gpx, ".tcx": parse_tcx}
@@ -68,34 +70,121 @@ def enrich_stream_metrics(db: Session, athlete_id: int, parsed: ParsedActivity) 
     computed_np = normalized_power(parsed.streams)
     if parsed.normalized_power is None and computed_np is not None:
         parsed.normalized_power = computed_np
+    terrain_stream = terrain_stream_metrics(parsed.streams, parsed.duration_s)
+    # Device-provided FIT totals remain authoritative. Stream-derived gain/loss only
+    # fill gaps, notably GPX/Strava sources that do not expose descent summaries.
+    if parsed.elevation_gain_m is None and terrain_stream.get("stream_elevation_gain_m") is not None:
+        parsed.elevation_gain_m = terrain_stream["stream_elevation_gain_m"]
+    if parsed.elevation_loss_m is None and terrain_stream.get("stream_elevation_loss_m") is not None:
+        parsed.elevation_loss_m = terrain_stream["stream_elevation_loss_m"]
     return {
         "normalized_power_computed": computed_np,
         "power_zones_s": power_zone_seconds(parsed.streams, threshold_power),
         "hr_zones_s": hr_zone_seconds(parsed.streams, threshold_hr),
         "aerobic_decoupling_pct": aerobic_decoupling(parsed.streams),
+        **{k: v for k, v in terrain_stream.items() if v is not None},
     }
 
 
 def calculate_load(db: Session, athlete_id: int, parsed: ParsedActivity):
+    """Return the v0.5 composite load plus transparent component profile."""
     day = parsed.start_time.date()
     threshold_power = threshold(db, athlete_id, parsed.sport, "ftp" if parsed.sport == "cycling" else "critical_power", day)
     resting_hr = threshold(db, athlete_id, parsed.sport, "resting_hr", day) or threshold(db, athlete_id, "global", "resting_hr", day)
     max_hr = threshold(db, athlete_id, parsed.sport, "max_hr", day) or threshold(db, athlete_id, "global", "max_hr", day)
     try:
         if parsed.normalized_power and threshold_power:
-            result = power_load(parsed.duration_s, parsed.normalized_power, threshold_power)
+            metabolic = power_load(parsed.duration_s, parsed.normalized_power, threshold_power)
         elif parsed.avg_power and threshold_power:
-            result = power_load(parsed.duration_s, parsed.avg_power, threshold_power)
+            metabolic = power_load(parsed.duration_s, parsed.avg_power, threshold_power)
         elif parsed.avg_hr and resting_hr and max_hr:
-            result = hr_trimp_load(parsed.duration_s, parsed.avg_hr, resting_hr, max_hr)
+            metabolic = hr_trimp_load(parsed.duration_s, parsed.avg_hr, resting_hr, max_hr)
         else:
             # Neutral duration fallback until athlete adds RPE/thresholds.
-            result = rpe_load(parsed.duration_s, 3.0)
+            metabolic = rpe_load(parsed.duration_s, parsed.rpe or 3.0)
     except ValueError:
-        result = rpe_load(max(parsed.duration_s, 60), 3.0)
-    mech = mountain_mechanical_load(parsed.duration_s, parsed.elevation_gain_m, parsed.elevation_loss_m) if parsed.sport in {"running", "trail_running", "hiking", "mountaineering"} else None
-    return result, mech
+        metabolic = rpe_load(max(parsed.duration_s, 60), parsed.rpe or 3.0)
 
+    terrain = terrain_load_profile(
+        parsed.sport, parsed.duration_s, parsed.distance_m, parsed.elevation_gain_m, parsed.elevation_loss_m
+    )
+    overall, blend = composite_training_load(parsed.sport, metabolic.load, terrain)
+    details = {
+        **metabolic.details,
+        "metabolic_load": metabolic.load,
+        "metabolic_method": metabolic.method,
+        "terrain": terrain.as_dict() if terrain else None,
+        "composite": blend,
+    }
+    hybrid = terrain is not None and parsed.sport in {"running", "trail_running", "hiking", "mountaineering"}
+    result = LoadResult(
+        load=overall,
+        method=f"hybrid_{metabolic.method}_terrain" if hybrid else metabolic.method,
+        confidence=metabolic.confidence,
+        details=details,
+        intensity_factor=metabolic.intensity_factor,
+        trimp=metabolic.trimp,
+        mechanical_load=terrain.mechanical_load if terrain else None,
+    )
+    return result, terrain
+
+
+
+def parsed_from_activity(activity: Activity, source_metadata: dict | None = None) -> ParsedActivity:
+    samples = activity.streams.samples if activity.streams is not None and activity.streams.samples else []
+    return ParsedActivity(
+        sport=activity.sport,
+        subtype=activity.subtype,
+        name=activity.name,
+        start_time=activity.start_time,
+        duration_s=activity.duration_s,
+        moving_time_s=activity.moving_time_s,
+        distance_m=activity.distance_m,
+        elevation_gain_m=activity.elevation_gain_m,
+        elevation_loss_m=activity.elevation_loss_m,
+        avg_hr=activity.avg_hr,
+        max_hr=activity.max_hr,
+        avg_power=activity.avg_power,
+        normalized_power=activity.normalized_power,
+        avg_cadence=activity.avg_cadence,
+        streams=samples,
+        source_metadata=source_metadata or {},
+    )
+
+
+def write_metrics(db: Session, athlete_id: int, activity: Activity, parsed: ParsedActivity, stream_details: dict | None = None) -> ActivityMetrics:
+    stream_details = stream_details if stream_details is not None else enrich_stream_metrics(db, athlete_id, parsed)
+    # Persist any high-quality fields derived from streams.
+    if activity.normalized_power is None and parsed.normalized_power is not None:
+        activity.normalized_power = parsed.normalized_power
+    if activity.elevation_gain_m is None and parsed.elevation_gain_m is not None:
+        activity.elevation_gain_m = parsed.elevation_gain_m
+    if activity.elevation_loss_m is None and parsed.elevation_loss_m is not None:
+        activity.elevation_loss_m = parsed.elevation_loss_m
+
+    result, terrain = calculate_load(db, athlete_id, parsed)
+    details = dict(result.details)
+    details.update({k: v for k, v in stream_details.items() if v is not None})
+    if parsed.source_metadata.get("classification"):
+        details["classification"] = parsed.source_metadata["classification"]
+    metrics = activity.metrics
+    if metrics is None:
+        metrics = ActivityMetrics(activity_id=activity.id)
+        db.add(metrics)
+    metrics.training_load = result.load
+    metrics.load_method = result.method
+    metrics.load_confidence = result.confidence
+    metrics.intensity_factor = result.intensity_factor
+    metrics.trimp = result.trimp
+    metrics.mechanical_load = terrain.mechanical_load if terrain else None
+    metrics.metric_version = settings.metric_version
+    metrics.details = details
+    return metrics
+
+
+def recalculate_activity_metrics(db: Session, athlete_id: int, activity: Activity, classification_metadata: dict | None = None) -> ActivityMetrics:
+    parsed = parsed_from_activity(activity, classification_metadata)
+    return write_metrics(db, athlete_id, activity, parsed)
 
 def _fill_missing(activity: Activity, parsed: ParsedActivity) -> None:
     """Merge conservatively: an integration can enrich fields but does not erase richer uploaded data."""
@@ -115,6 +204,9 @@ def ingest_parsed(
     raw_file_id: int | None = None,
     import_session_id: int | None = None,
 ):
+    # Normalize sport before deduplication so a trail run and road run do not share
+    # an accidental fingerprint solely because a source used a generic sport label.
+    classification = apply_classification(parsed)
     # Source IDs are the strongest deduplication key when available.
     source = None
     if external_id:
@@ -130,9 +222,14 @@ def ingest_parsed(
         source.metadata_json = parsed.source_metadata
         if parsed.streams and (activity.streams is None or not activity.streams.samples):
             if activity.streams is None:
-                db.add(ActivityStreams(activity_id=activity.id, samples=parsed.streams))
+                activity.streams = ActivityStreams(activity_id=activity.id, samples=parsed.streams)
+                db.add(activity.streams)
             else:
                 activity.streams.samples = parsed.streams
+        merged = parsed_from_activity(activity, parsed.source_metadata)
+        if not merged.streams and parsed.streams:
+            merged.streams = parsed.streams
+        write_metrics(db, athlete_id, activity, merged)
         db.commit()
         return activity, True
 
@@ -156,9 +253,14 @@ def ingest_parsed(
             ))
         if parsed.streams and (existing.streams is None or not existing.streams.samples):
             if existing.streams is None:
-                db.add(ActivityStreams(activity_id=existing.id, samples=parsed.streams))
+                existing.streams = ActivityStreams(activity_id=existing.id, samples=parsed.streams)
+                db.add(existing.streams)
             else:
                 existing.streams.samples = parsed.streams
+        merged = parsed_from_activity(existing, parsed.source_metadata)
+        if not merged.streams and parsed.streams:
+            merged.streams = parsed.streams
+        write_metrics(db, athlete_id, existing, merged)
         db.commit()
         return existing, True
 
@@ -192,20 +294,7 @@ def ingest_parsed(
     ))
     if parsed.streams:
         db.add(ActivityStreams(activity_id=activity.id, samples=parsed.streams))
-    result, mech = calculate_load(db, athlete_id, parsed)
-    details = dict(result.details)
-    details.update({k: v for k, v in stream_details.items() if v is not None})
-    db.add(ActivityMetrics(
-        activity_id=activity.id,
-        training_load=result.load,
-        load_method=result.method,
-        load_confidence=result.confidence,
-        intensity_factor=result.intensity_factor,
-        trimp=result.trimp,
-        mechanical_load=mech,
-        metric_version=settings.metric_version,
-        details=details,
-    ))
+    write_metrics(db, athlete_id, activity, parsed, stream_details)
     db.commit()
     db.refresh(activity)
     return activity, False

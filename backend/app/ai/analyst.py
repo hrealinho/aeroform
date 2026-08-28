@@ -33,18 +33,23 @@ def analyse_question(context: dict, question: str) -> dict:
             answer = f"Your weekly load is not dramatically above your norm, but your current form is {state.get('form', 0):.1f}, which indicates short-term fatigue is elevated relative to longer-term fitness. I would treat that as a reason to protect recovery before adding extra intensity."
         else:
             answer = "The load metrics do not show a large obvious spike. I would look next at sport-specific load, unusually long sessions, sleep/recovery context, or non-training stress rather than assuming total training load alone explains it."
-    elif any(word in q for word in ("vertical", "elevation", "climb", "uphill", "mountain")):
+    elif any(word in q for word in ("vertical", "elevation", "climb", "uphill", "downhill", "descent", "mountain")):
         mountain_sports = ["trail_running", "running", "hiking", "mountaineering"]
-        total = sum(float((context["sports_28d"].get(s) or {}).get("elevation_m") or 0) for s in mountain_sports)
+        gain = sum(float((context["sports_28d"].get(s) or {}).get("elevation_gain_m") or 0) for s in mountain_sports)
+        loss = sum(float((context["sports_28d"].get(s) or {}).get("elevation_loss_m") or 0) for s in mountain_sports)
+        downhill_load = sum(float((context["sports_28d"].get(s) or {}).get("descent_load") or 0) for s in mountain_sports)
+        mechanical = sum(float((context["sports_28d"].get(s) or {}).get("mechanical_load") or 0) for s in mountain_sports)
         sessions = sum(int((context["sports_28d"].get(s) or {}).get("sessions") or 0) for s in mountain_sports)
         primary = context["objectives"][0] if context["objectives"] else None
-        evidence.append({"metric": "vertical gain", "value": round(total), "period": "last 28 days"})
-        evidence.append({"metric": "mountain/run sessions", "value": sessions, "period": "last 28 days"})
+        evidence.append({"metric": "vertical gain", "value": round(gain), "period": "last 28 days"})
+        evidence.append({"metric": "vertical loss", "value": round(loss), "period": "last 28 days"})
+        evidence.append({"metric": "downhill/eccentric load", "value": round(downhill_load, 1), "period": "last 28 days"})
+        evidence.append({"metric": "mountain mechanical load", "value": round(mechanical, 1), "period": "last 28 days"})
         if primary and primary.get("elevation_m"):
             evidence.append({"metric": "next objective elevation", "value": primary["elevation_m"], "period": primary["date"]})
-            answer = f"You accumulated about {total:.0f} m of vertical gain across {sessions} relevant sessions in the last 28 days. Your next objective, {primary['name']}, has about {primary['elevation_m']:.0f} m of climbing. I would judge specificity from the trend and long-session vertical distribution rather than the race elevation alone."
+            answer = f"You accumulated about {gain:.0f} m of ascent and {loss:.0f} m of descent across {sessions} relevant sessions in the last 28 days. Downhill/eccentric load is {downhill_load:.0f} and total mountain mechanical load is {mechanical:.0f}. Your next objective, {primary['name']}, has about {primary['elevation_m']:.0f} m of climbing, so I would judge specificity from both ascent and descent exposure, especially in long sessions."
         else:
-            answer = f"You accumulated about {total:.0f} m of vertical gain across {sessions} relevant sessions in the last 28 days. Without an elevation-specific target objective, I can describe the trend but not say whether that amount is sufficient for a particular race."
+            answer = f"You accumulated about {gain:.0f} m of ascent and {loss:.0f} m of descent across {sessions} relevant sessions in the last 28 days. Downhill/eccentric load is {downhill_load:.0f}. Without an elevation-specific target objective, I can describe your mountain-load trend but not say whether it is sufficient for a particular race."
     elif any(word in q for word in ("compare", "improv", "progress", "last month", "four weeks")):
         recent = context.get("recent_four_weeks") or []
         prior = context.get("prior_four_weeks") or []

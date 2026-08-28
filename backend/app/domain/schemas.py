@@ -19,6 +19,11 @@ class ActivityOut(BaseModel):
     load_confidence: str | None = None
 
 
+class ActivityClassificationUpdate(BaseModel):
+    sport: str = Field(pattern="^(running|trail_running|cycling|hiking|mountaineering|climbing|other)$")
+    subtype: str | None = None
+
+
 class ObjectiveCreate(BaseModel):
     name: str
     event_date: date

@@ -8,7 +8,7 @@ from sqlalchemy import select, func
 from app.core.config import settings
 from app.db.session import get_db
 from app.domain.models import Athlete, Activity, ActivityMetrics, ImportSession, Objective, PlannedWorkout, TrainingBlock, PlanningConstraint, PlanChangeAudit, IntegrationConnection, AthleteCoachProfile, AIProposal, CoachMessage
-from app.domain.schemas import ObjectiveCreate, TrainingBlockCreate, TrainingBlockUpdate, PlannedWorkoutCreate, PlannedWorkoutUpdate, ManualMatch, PlanningConstraintCreate, CoachProfileUpdate, CoachAsk, GenerateWeekRequest, AdaptWeekRequest
+from app.domain.schemas import ObjectiveCreate, TrainingBlockCreate, TrainingBlockUpdate, PlannedWorkoutCreate, PlannedWorkoutUpdate, ManualMatch, PlanningConstraintCreate, CoachProfileUpdate, CoachAsk, GenerateWeekRequest, AdaptWeekRequest, ActivityClassificationUpdate
 from app.metrics.fitness import ewma_series
 from app.planning.workouts import estimate_planned_load, infer_intensity
 from app.planning.projection import project_load_series, projection_warnings, weekly_totals
@@ -24,6 +24,8 @@ from app.ai.provider import get_provider
 from app.ai.planner import generate_week_seed, adapt_week_seed
 from app.ai.commands import validate_commands, apply_commands
 from app.ai.explain import explain_workout
+from app.services.ingestion import recalculate_activity_metrics
+from app.services.dedup import activity_fingerprint
 
 router = APIRouter(prefix="/api/v1")
 
@@ -49,34 +51,86 @@ def dispatch(task, *args):
 
 @router.get("/health")
 def health():
-    return {"status": "ok", "version": "0.4.0", "async_tasks": settings.async_tasks, "ai_provider": settings.ai_provider}
+    return {"status": "ok", "version": "0.5.0", "async_tasks": settings.async_tasks, "ai_provider": settings.ai_provider}
+
+
+def _terrain_details(metrics: ActivityMetrics | None) -> dict:
+    if not metrics or not isinstance(metrics.details, dict):
+        return {}
+    terrain = metrics.details.get("terrain")
+    return terrain if isinstance(terrain, dict) else {}
+
+
+def _activity_payload(activity: Activity, metrics: ActivityMetrics | None) -> dict:
+    details = metrics.details if metrics and isinstance(metrics.details, dict) else {}
+    terrain = _terrain_details(metrics)
+    return {
+        "id": activity.id,
+        "sport": activity.sport,
+        "subtype": activity.subtype,
+        "name": activity.name,
+        "start_time": activity.start_time,
+        "duration_s": activity.duration_s,
+        "distance_m": activity.distance_m,
+        "elevation_gain_m": activity.elevation_gain_m,
+        "elevation_loss_m": activity.elevation_loss_m,
+        "avg_hr": activity.avg_hr,
+        "avg_power": activity.avg_power,
+        "normalized_power": activity.normalized_power,
+        "training_load": metrics.training_load if metrics else None,
+        "metabolic_load": details.get("metabolic_load"),
+        "load_method": metrics.load_method if metrics else None,
+        "load_confidence": metrics.load_confidence if metrics else None,
+        "mechanical_load": metrics.mechanical_load if metrics else None,
+        "ascent_load": terrain.get("ascent_load"),
+        "descent_load": terrain.get("descent_load"),
+        "durability_load": terrain.get("durability_load"),
+        "vertical_load": terrain.get("vertical_load"),
+        "gain_per_km": terrain.get("gain_per_km"),
+        "loss_per_km": terrain.get("loss_per_km"),
+        "classification": details.get("classification"),
+        "metric_details": details,
+    }
 
 
 @router.get("/activities")
 def activities(db: Session = Depends(get_db), limit: int = Query(100, ge=1, le=1000), sport: str | None = None):
     athlete = demo_athlete(db)
-    stmt = select(Activity, ActivityMetrics).outerjoin(ActivityMetrics).where(Activity.athlete_id == athlete.id).order_by(Activity.start_time.desc()).limit(limit)
+    stmt = select(Activity, ActivityMetrics).outerjoin(ActivityMetrics).where(Activity.athlete_id == athlete.id)
     if sport:
         stmt = stmt.where(Activity.sport == sport)
-    rows = db.execute(stmt).all()
-    return [{
-        "id": a.id,
-        "sport": a.sport,
-        "subtype": a.subtype,
-        "name": a.name,
-        "start_time": a.start_time,
-        "duration_s": a.duration_s,
-        "distance_m": a.distance_m,
-        "elevation_gain_m": a.elevation_gain_m,
-        "avg_hr": a.avg_hr,
-        "avg_power": a.avg_power,
-        "normalized_power": a.normalized_power,
-        "training_load": m.training_load if m else None,
-        "load_method": m.load_method if m else None,
-        "load_confidence": m.load_confidence if m else None,
-        "mechanical_load": m.mechanical_load if m else None,
-        "metric_details": m.details if m else None,
-    } for a, m in rows]
+    stmt = stmt.order_by(Activity.start_time.desc()).limit(limit)
+    return [_activity_payload(a, m) for a, m in db.execute(stmt).all()]
+
+
+@router.patch("/activities/{activity_id}/classification")
+def update_activity_classification(activity_id: int, payload: ActivityClassificationUpdate, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    activity = db.get(Activity, activity_id)
+    if not activity or activity.athlete_id != athlete.id:
+        raise HTTPException(404, "Activity not found")
+    new_fp = activity_fingerprint(payload.sport, activity.start_time, activity.duration_s, activity.distance_m)
+    collision = db.scalar(select(Activity).where(
+        Activity.athlete_id == athlete.id,
+        Activity.fingerprint == new_fp,
+        Activity.id != activity.id,
+    ))
+    if collision:
+        raise HTTPException(409, f"Classification would collide with activity {collision.id}")
+    activity.sport = payload.sport
+    activity.subtype = payload.subtype
+    activity.fingerprint = new_fp
+    recalculate_activity_metrics(db, athlete.id, activity, {
+        "classification": {
+            "sport": payload.sport,
+            "confidence": "high",
+            "reason": "user override",
+            "source": "manual",
+        }
+    })
+    db.commit()
+    db.refresh(activity)
+    return _activity_payload(activity, activity.metrics)
 
 
 @router.post("/imports/files")
@@ -280,19 +334,46 @@ async def strava_webhook(request: Request, db: Session = Depends(get_db)):
     return {"accepted": True}
 
 
+def _load_component(metrics: ActivityMetrics, kind: str) -> float:
+    details = metrics.details if isinstance(metrics.details, dict) else {}
+    terrain = details.get("terrain") if isinstance(details.get("terrain"), dict) else {}
+    if kind == "overall":
+        return float(metrics.training_load or 0)
+    if kind == "metabolic":
+        return float(details.get("metabolic_load") or metrics.training_load or 0)
+    if kind == "mechanical":
+        return float(metrics.mechanical_load or 0)
+    if kind == "ascent":
+        return float(terrain.get("ascent_load") or 0)
+    if kind == "descent":
+        return float(terrain.get("descent_load") or 0)
+    if kind == "durability":
+        return float(terrain.get("durability_load") or 0)
+    raise HTTPException(400, "load_kind must be overall, metabolic, mechanical, ascent, descent, or durability")
+
+
 @router.get("/analytics/fitness")
-def fitness(start: date | None = None, end: date | None = None, sport: str | None = None, db: Session = Depends(get_db)):
+def fitness(
+    start: date | None = None,
+    end: date | None = None,
+    sport: str | None = None,
+    load_kind: str = Query("overall"),
+    db: Session = Depends(get_db),
+):
     athlete = demo_athlete(db)
     end = end or date.today()
     start = start or end - timedelta(days=365)
-    stmt = select(func.date(Activity.start_time), func.sum(ActivityMetrics.training_load)).join(ActivityMetrics).where(
+    stmt = select(Activity, ActivityMetrics).join(ActivityMetrics).where(
         Activity.athlete_id == athlete.id,
         Activity.start_time >= datetime.combine(start, datetime.min.time()),
         Activity.start_time <= datetime.combine(end, datetime.max.time()),
-    ).group_by(func.date(Activity.start_time))
+    )
     if sport:
         stmt = stmt.where(Activity.sport == sport)
-    daily = {date.fromisoformat(str(d)): float(load or 0) for d, load in db.execute(stmt).all()}
+    daily: dict[date, float] = {}
+    for activity, metrics in db.execute(stmt):
+        day = activity.start_time.date()
+        daily[day] = daily.get(day, 0.0) + _load_component(metrics, load_kind)
     return ewma_series(daily, start, end)
 
 
@@ -306,14 +387,33 @@ def weekly_analytics(weeks: int = Query(16, ge=1, le=260), sport: str | None = N
     buckets: dict[str, dict] = {}
     for activity, metrics in db.execute(stmt):
         monday = (activity.start_time.date() - timedelta(days=activity.start_time.weekday())).isoformat()
-        b = buckets.setdefault(monday, {"week": monday, "load": 0.0, "hours": 0.0, "distance_km": 0.0, "elevation_m": 0.0, "mechanical_load": 0.0, "activities": 0})
-        b["load"] += metrics.training_load or 0
+        b = buckets.setdefault(monday, {
+            "week": monday, "load": 0.0, "metabolic_load": 0.0, "mechanical_load": 0.0,
+            "ascent_load": 0.0, "descent_load": 0.0, "durability_load": 0.0,
+            "hours": 0.0, "distance_km": 0.0, "elevation_gain_m": 0.0, "elevation_loss_m": 0.0,
+            "activities": 0,
+        })
+        b["load"] += _load_component(metrics, "overall")
+        b["metabolic_load"] += _load_component(metrics, "metabolic")
+        b["mechanical_load"] += _load_component(metrics, "mechanical")
+        b["ascent_load"] += _load_component(metrics, "ascent")
+        b["descent_load"] += _load_component(metrics, "descent")
+        b["durability_load"] += _load_component(metrics, "durability")
         b["hours"] += activity.duration_s / 3600
         b["distance_km"] += (activity.distance_m or 0) / 1000
-        b["elevation_m"] += activity.elevation_gain_m or 0
-        b["mechanical_load"] += metrics.mechanical_load or 0
+        b["elevation_gain_m"] += activity.elevation_gain_m or 0
+        b["elevation_loss_m"] += activity.elevation_loss_m or 0
         b["activities"] += 1
-    return [{**b, "load": round(b["load"], 1), "hours": round(b["hours"], 1), "distance_km": round(b["distance_km"], 1), "elevation_m": round(b["elevation_m"]), "mechanical_load": round(b["mechanical_load"], 1)} for _, b in sorted(buckets.items())]
+    result = []
+    for _, b in sorted(buckets.items()):
+        for key in ("load", "metabolic_load", "mechanical_load", "ascent_load", "descent_load", "durability_load", "hours", "distance_km"):
+            b[key] = round(b[key], 1)
+        b["elevation_gain_m"] = round(b["elevation_gain_m"])
+        b["elevation_loss_m"] = round(b["elevation_loss_m"])
+        # Backward-compatible alias used by the v0.4 UI/client.
+        b["elevation_m"] = b["elevation_gain_m"]
+        result.append(b)
+    return result
 
 
 @router.post("/objectives")

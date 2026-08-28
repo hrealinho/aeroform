@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.5.0 - Sport-aware terrain load
+
+- Replaced the v0.4 mountain heuristic with transparent distance, ascent, descent and durability load dimensions.
+- Added sport-specific composite training-load blending so trail running/hiking elevation affects fitness without blindly double-counting uphill cardiovascular stress.
+- Added explicit downhill/eccentric load with stronger descent weighting for trail/mountain sports.
+- Added FIT sub-sport classification, conservative GPX sport inference, classification confidence/reason metadata, and manual classification override with metric recomputation.
+- Added GPX HR/cadence extension parsing and smoothed elevation gain/loss estimation for GPX/TCX.
+- Added Strava stream-derived elevation loss and grade/vertical stream metrics.
+- Added overall/metabolic/mechanical/ascent/descent/durability analytics modes and richer weekly aggregates.
+- Added dashboard load explorer and weekly load-profile visualization.
+- Extended Athlete Context and Coach vertical analysis with descent and mechanical load.
+- Added a metric recomputation script for existing v0.4 databases.
+- Expanded the backend suite to 28 passing tests.
+
 ## v0.3.0 - Planning vertical slice
 
 - Added deterministic planned-workout load estimation with versioned intensity factors.
