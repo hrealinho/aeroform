@@ -2,6 +2,21 @@
 
 Training-first endurance analytics, season planning and grounded AI coaching. The product deliberately keeps social mechanics out of the core experience: activities become private training data used for analytics, projections and adaptive planning.
 
+## v0.6.0 power profile and race predictions
+
+- **Power** tab: mean-maximal power curve, critical power and W', rider type, and
+  period-over-period comparison. Needs per-second power streams, so set
+  `STRAVA_SYNC_STREAMS=true` and backfill with
+  `POST /api/v1/strava/sync?after_days=365`.
+- **Race predictions** for 5K, 10K, half and marathon, from recorded road-running efforts.
+  Riegel and critical-speed methods are shown side by side with a confidence that reflects
+  how far each reaches beyond the evidence.
+- Set your weight once (`metric: weight_kg`) for watts per kilo. It is stored with an
+  effective date, so historical W/kg stays correct as weight changes.
+
+Chart colours are validated for colourblind separation and contrast against the app's own
+dark surface rather than picked by eye; see the note at the top of `frontend/app/globals.css`.
+
 ## v0.5.3 load correctness
 
 Validated by replaying a real 2,767-activity history through the metrics. Load was
@@ -299,6 +314,9 @@ GET  /api/v1/analytics/projection
 POST /api/v1/matching/auto
 POST /api/v1/planned-workouts
 PATCH /api/v1/planned-workouts/{id}
+
+GET  /api/v1/power/profile
+GET  /api/v1/running/predictions
 
 GET  /api/v1/activities/duplicates
 DELETE /api/v1/activities/{id}

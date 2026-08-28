@@ -1,5 +1,51 @@
 # Changelog
 
+## v0.6.0 - Power profile, race predictions, and a real design system
+
+### Added
+
+- **Power profile** (`/power`, `GET /api/v1/power/profile`). Mean-maximal power curve on a
+  log-duration axis, key-effort tiles, full efforts table with period-over-period change,
+  critical power and W' fitted from the curve, and rider-type classification. Per-activity
+  bests are computed once at ingest and stored on the metrics row, so a multi-year curve is
+  an aggregation rather than a re-read of every stream.
+- **Critical power** fitted with the two-parameter model in linear form (P = W'/t + CP) over
+  2-20 minute efforts only, since the model over-predicts short efforts and under-predicts
+  long ones outside that band. Reports points used and confidence.
+- **Rider type** from curve *shape* rather than absolute height, expressed as ratios against
+  the athlete's own 5-minute power, so it needs no body weight.
+- **Running race predictions** (`GET /api/v1/running/predictions`) for 5K, 10K, half and full
+  marathon. Two methods reported side by side rather than blended: Riegel extrapolation from
+  the closest recorded effort, and critical speed from threshold pace. Confidence is driven by
+  how far the prediction reaches past the evidence, so a marathon predicted from a 10K is
+  explicitly labelled an extrapolation. Trail running is excluded because terrain makes raw
+  pace meaningless as race evidence.
+- **Weight** as a time-versioned threshold (`metric: weight_kg`) rather than a new column, so
+  W/kg stays correct for historical activities and no migration is needed.
+- `POST /api/v1/strava/sync?after_days=N` scopes a backfill. With streams enabled each
+  activity costs an extra API call, and Strava allows roughly 100 per 15 minutes.
+
+### Changed
+
+- **Design system.** `globals.css` is now token-based: surfaces, ink, status, spacing, radii
+  and chart colour defined once and referenced by role. Adds an active nav state, a proper
+  type scale, tabular numerals throughout, hover states, and restyled tables, cards,
+  calendar, timeline and warnings.
+- **Chart colours are validated, not chosen by eye.** Series hues were run through the
+  colourblind/contrast validator against this theme's actual surface. Fitness (blue), fatigue
+  (magenta) and form (yellow) pass on all pairs; the four load-stack slots pass on adjacent
+  pairs, which is the pairlist that applies to stacked bars. A blue/violet pairing for the
+  power-curve comparison was rejected by the validator and replaced with a muted dashed
+  neutral, which is also the more honest encoding: a previous period is a reference, not a
+  second category.
+- Charts gained legends (identity no longer rests on colour alone), a gradient fill under
+  fitness, dashed form, a 2px surface gap between stacked segments, active dots, and a
+  today marker on the projection.
+- Threshold estimation and the power curve share one duration-weighted rolling-window
+  implementation. Sample durations are derived once per stream instead of once per window,
+  which cut curve computation roughly threefold.
+
+
 ## v0.5.3 - Load correctness, validated against a real history
 
 Found by replaying a real 2,767-activity history (2012-2026) through the metrics rather

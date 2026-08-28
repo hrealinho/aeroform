@@ -43,7 +43,8 @@ def _series(samples: list[dict], key: str) -> list[float | None]:
     return [_finite(s.get(key)) for s in samples]
 
 
-def _rolling_extreme_average(samples: list[dict], key: str, seconds: int, want_max: bool, min_coverage: float = 0.85) -> float | None:
+def _rolling_extreme_average(samples: list[dict], key: str, seconds: int, want_max: bool, min_coverage: float = 0.85,
+                             durations: list[float] | None = None) -> float | None:
     """Best (or lowest) duration-weighted rolling mean over a window of real seconds.
 
     The window is measured with the stream's own timestamps rather than by counting
@@ -54,7 +55,10 @@ def _rolling_extreme_average(samples: list[dict], key: str, seconds: int, want_m
     if seconds <= 0 or not samples:
         return None
     values = _series(samples, key)
-    durations = sample_durations(samples)
+    # Callers sweeping many windows over one stream pass durations in: deriving them
+    # re-parses every timestamp, which dominated the cost of building a power curve.
+    if durations is None:
+        durations = sample_durations(samples)
     if sum(durations) < seconds:
         return None
 
@@ -83,14 +87,16 @@ def _rolling_extreme_average(samples: list[dict], key: str, seconds: int, want_m
     return best
 
 
-def rolling_best_average(samples: list[dict], key: str, seconds: int, min_coverage: float = 0.85) -> float | None:
+def rolling_best_average(samples: list[dict], key: str, seconds: int, min_coverage: float = 0.85,
+                         durations: list[float] | None = None) -> float | None:
     """Highest duration-weighted rolling mean over ``seconds`` of real time."""
-    return _rolling_extreme_average(samples, key, seconds, want_max=True, min_coverage=min_coverage)
+    return _rolling_extreme_average(samples, key, seconds, want_max=True, min_coverage=min_coverage, durations=durations)
 
 
-def rolling_lowest_average(samples: list[dict], key: str, seconds: int, min_coverage: float = 0.85) -> float | None:
+def rolling_lowest_average(samples: list[dict], key: str, seconds: int, min_coverage: float = 0.85,
+                           durations: list[float] | None = None) -> float | None:
     """Lowest duration-weighted rolling mean over ``seconds`` of real time."""
-    return _rolling_extreme_average(samples, key, seconds, want_max=False, min_coverage=min_coverage)
+    return _rolling_extreme_average(samples, key, seconds, want_max=False, min_coverage=min_coverage, durations=durations)
 
 
 def _max_effort(activities: list[Activity], key: str, seconds: int) -> tuple[float | None, int | None]:

@@ -60,10 +60,10 @@ def _cleanup_staging(paths: list[str]) -> None:
 
 
 @celery_app.task(bind=True, autoretry_for=(OSError,), retry_backoff=True, max_retries=3)
-def sync_strava_history(self, athlete_id: int, import_session_id: int):
+def sync_strava_history(self, athlete_id: int, import_session_id: int, after_days: int | None = None):
     db = SessionLocal()
     try:
-        result = historical_sync(db, athlete_id, import_session_id)
+        result = historical_sync(db, athlete_id, import_session_id, after_days=after_days)
         if result.get("paused_rate_limit"):
             raise self.retry(countdown=15 * 60, max_retries=96)
         return result

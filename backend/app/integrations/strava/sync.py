@@ -137,7 +137,8 @@ def delete_activity_source(db: Session, athlete_id: int, strava_activity_id: int
     return True
 
 
-def historical_sync(db: Session, athlete_id: int, import_session_id: int, max_pages: int | None = None) -> dict:
+def historical_sync(db: Session, athlete_id: int, import_session_id: int, max_pages: int | None = None,
+                    after_days: int | None = None) -> dict:
     """Backfill history efficiently using paginated summary activities.
 
     We deliberately do *not* fetch every historical activity individually. That would turn a
@@ -157,7 +158,12 @@ def historical_sync(db: Session, athlete_id: int, import_session_id: int, max_pa
     while True:
         if max_pages and pages_this_run >= max_pages:
             break
-        items, headers = api_get(db, connection, "/athlete/activities", params={"page": page, "per_page": settings.strava_sync_page_size})
+        params = {"page": page, "per_page": settings.strava_sync_page_size}
+        if after_days:
+            # Scoping the window matters when streams are enabled: each activity costs an
+            # extra API call, and Strava allows ~100 per 15 minutes.
+            params["after"] = int((utcnow() - timedelta(days=after_days)).timestamp())
+        items, headers = api_get(db, connection, "/athlete/activities", params=params)
         if not isinstance(items, list) or not items:
             session.status = "completed_with_errors" if failures else "completed"
             _write_state(session, page, failures, counted_pages, completed=True)

@@ -31,8 +31,10 @@ from app.ai.provider import get_provider
 from app.ai.planner import generate_week_seed, adapt_week_seed
 from app.ai.commands import validate_commands, apply_commands
 from app.ai.explain import explain_workout
-from app.services.ingestion import recalculate_activity_metrics
+from app.services.ingestion import recalculate_activity_metrics, threshold as threshold_at
 from app.metrics.thresholds import estimate_thresholds, persist_estimates, current_thresholds_and_zones, first_activity_date, upsert_manual_threshold, delete_threshold
+from app.metrics.power_profile import curve_payload
+from app.metrics.race_predictor import predict as predict_races
 from app.services.dedup import activity_fingerprint
 from app.services.duplicates import find_duplicate_groups, delete_activity
 
@@ -303,7 +305,7 @@ def strava_callback(code: str | None = None, state: str | None = None, error: st
     db.add(session)
     db.commit()
     db.refresh(session)
-    dispatch(sync_strava_history, athlete.id, session.id)
+    dispatch(sync_strava_history, athlete.id, session.id, None)
     return RedirectResponse(settings.strava_frontend_redirect_uri)
 
 
@@ -360,7 +362,12 @@ def _active_strava_import(db: Session, athlete_id: int):
 
 
 @router.post("/strava/sync")
-def start_strava_sync(db: Session = Depends(get_db)):
+def start_strava_sync(after_days: int | None = Query(None, ge=1, le=7300), db: Session = Depends(get_db)):
+    """Start a historical Strava backfill.
+
+    ``after_days`` scopes the window. With STRAVA_SYNC_STREAMS on, every activity costs
+    an extra API call, so a bounded window is usually what you want.
+    """
     athlete = demo_athlete(db)
     connection = db.scalar(select(IntegrationConnection).where(
         IntegrationConnection.athlete_id == athlete.id,
@@ -375,8 +382,8 @@ def start_strava_sync(db: Session = Depends(get_db)):
     db.add(session)
     db.commit()
     db.refresh(session)
-    task_id = dispatch(sync_strava_history, athlete.id, session.id)
-    return {"import_session_id": session.id, "task_id": task_id, "status": session.status}
+    task_id = dispatch(sync_strava_history, athlete.id, session.id, after_days)
+    return {"import_session_id": session.id, "task_id": task_id, "status": session.status, "after_days": after_days}
 
 
 @router.get("/strava/webhook")
@@ -590,6 +597,37 @@ def recompute_from_thresholds(since_days: int | None = None, db: Session = Depen
     athlete = demo_athlete(db)
     return {"task_id": dispatch(recompute_athlete_metrics, athlete.id, since_days)}
 
+
+
+@router.get("/power/profile")
+def power_profile(
+    days: int = Query(365, ge=7, le=3650),
+    compare_days: int | None = Query(None, ge=7, le=3650),
+    db: Session = Depends(get_db),
+):
+    """Mean-maximal power curve, critical power and rider type for cycling."""
+    athlete = demo_athlete(db)
+    weight = threshold_at(db, athlete.id, "global", "weight_kg", date.today())
+    payload = curve_payload(db, athlete.id, weight, days, compare_days)
+    if not payload["has_data"]:
+        payload["advice"] = (
+            "A power curve needs per-second power streams. Set STRAVA_SYNC_STREAMS=true and "
+            "re-sync, or import the original FIT files, then recompute."
+        )
+    if weight is None:
+        payload["weight_advice"] = (
+            "Set a weight to see watts per kilo (sport: global, metric: weight_kg). It is stored "
+            "with an effective date, so historical values stay correct."
+        )
+    return payload
+
+
+@router.get("/running/predictions")
+def running_predictions(days: int = Query(365, ge=30, le=3650), db: Session = Depends(get_db)):
+    """Predicted 5K, 10K, half and full marathon times from recorded efforts."""
+    athlete = demo_athlete(db)
+    critical_speed = threshold_at(db, athlete.id, "running", "threshold_speed_mps", date.today())
+    return predict_races(db, athlete.id, days, critical_speed)
 
 @router.post("/objectives")
 def create_objective(payload: ObjectiveCreate, db: Session = Depends(get_db)):

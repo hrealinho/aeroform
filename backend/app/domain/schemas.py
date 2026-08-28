@@ -146,7 +146,9 @@ class PlanCommand(BaseModel):
 
 class ThresholdManualCreate(BaseModel):
     sport: str = Field(pattern="^(global|running|trail_running|cycling|hiking|mountaineering|climbing)$")
-    metric: str = Field(pattern="^(ftp|critical_power|threshold_hr|threshold_speed_mps|max_hr|resting_hr)$")
+    # weight_kg lives here because it is exactly what this table models: a physiological
+    # value that changes over time and must be resolved as of an activity's date.
+    metric: str = Field(pattern="^(ftp|critical_power|threshold_hr|threshold_speed_mps|max_hr|resting_hr|weight_kg)$")
     value: float = Field(gt=0)
     # Omitted valid_from back-dates to the first activity so the threshold actually
     # applies to stored history; pass an explicit date to scope it to a period.

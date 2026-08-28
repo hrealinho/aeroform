@@ -20,6 +20,7 @@ from app.importers.zip_import import extract_member, safe_members
 from app.importers.formats import activity_format, safe_basename
 from app.metrics.load import power_load, hr_trimp_load, rpe_load, terrain_load_profile, composite_training_load, resolve_durations, LoadResult
 from app.metrics.streams import normalized_power, power_zone_seconds, hr_zone_seconds, aerobic_decoupling
+from app.metrics.power_profile import mean_maximal
 from app.metrics.terrain import terrain_stream_metrics
 from app.services.classification import apply_classification
 from app.services.dedup import activity_fingerprint
@@ -84,6 +85,10 @@ def enrich_stream_metrics(db: Session, athlete_id: int, parsed: ParsedActivity) 
         "power_zones_s": power_zone_seconds(parsed.streams, threshold_power, parsed.duration_s),
         "hr_zones_s": hr_zone_seconds(parsed.streams, threshold_hr, parsed.duration_s),
         "aerobic_decoupling_pct": aerobic_decoupling(parsed.streams),
+        # Per-activity bests are stored so a multi-year power curve is an aggregation
+        # rather than a re-read of every stream on every request.
+        "mean_max_power": mean_maximal(parsed.streams, "power") or None,
+        "mean_max_speed": mean_maximal(parsed.streams, "speed") or None,
         **{k: v for k, v in terrain_stream.items() if v is not None},
     }
 
