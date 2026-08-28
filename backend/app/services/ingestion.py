@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 from app.core.config import settings
 from app.core.timeutil import to_utc
-from app.domain.models import Activity, ActivitySource, ActivityStreams, ActivityMetrics, RawActivityFile, ImportSession, AthleteThreshold
+from app.domain.models import Activity, ActivityLap, ActivitySource, ActivityStreams, ActivityMetrics, RawActivityFile, ImportSession, AthleteThreshold
 from app.importers.common import ParsedActivity
 from app.importers.fit import parse_fit
 from app.importers.gpx import parse_gpx
@@ -211,6 +211,31 @@ def _fill_missing(activity: Activity, parsed: ParsedActivity) -> None:
 
 
 
+
+def _replace_laps(db: Session, activity: Activity, parsed: ParsedActivity) -> None:
+    """Store the source's laps, replacing any previous set.
+
+    Replaced wholesale rather than merged: a re-import of the same activity is the
+    same lap sequence, and matching them up individually would be guesswork.
+    """
+    if not parsed.laps:
+        return
+    for existing in list(activity.laps or []):
+        db.delete(existing)
+    db.flush()
+    for lap in parsed.laps:
+        db.add(ActivityLap(
+            activity_id=activity.id, lap_index=lap.index, name=lap.name,
+            start_time=to_utc(lap.start_time) if lap.start_time else None,
+            elapsed_s=lap.elapsed_s, moving_s=lap.moving_s, distance_m=lap.distance_m,
+            elevation_gain_m=lap.elevation_gain_m, elevation_loss_m=lap.elevation_loss_m,
+            avg_hr=lap.avg_hr, max_hr=lap.max_hr, avg_power=lap.avg_power,
+            max_power=lap.max_power, normalized_power=lap.normalized_power,
+            avg_cadence=lap.avg_cadence, avg_speed_mps=lap.avg_speed_mps,
+            max_speed_mps=lap.max_speed_mps, trigger=lap.trigger,
+        ))
+
+
 def _reusable_stream_details(parsed: ParsedActivity, merged: ParsedActivity, stream_details: dict) -> dict | None:
     """Reuse already-computed stream metrics when the merged activity has the same stream.
 
@@ -256,6 +281,7 @@ def ingest_parsed(
         merged = parsed_from_activity(activity, parsed.source_metadata)
         if not merged.streams and parsed.streams:
             merged.streams = parsed.streams
+        _replace_laps(db, activity, parsed)
         write_metrics(db, athlete_id, activity, merged, _reusable_stream_details(parsed, merged, stream_details))
         db.commit()
         return activity, True
@@ -287,6 +313,7 @@ def ingest_parsed(
         merged = parsed_from_activity(existing, parsed.source_metadata)
         if not merged.streams and parsed.streams:
             merged.streams = parsed.streams
+        _replace_laps(db, existing, parsed)
         write_metrics(db, athlete_id, existing, merged, _reusable_stream_details(parsed, merged, stream_details))
         db.commit()
         return existing, True
@@ -322,6 +349,7 @@ def ingest_parsed(
     ))
     if parsed.streams:
         db.add(ActivityStreams(activity_id=activity.id, samples=parsed.streams))
+    _replace_laps(db, activity, parsed)
     write_metrics(db, athlete_id, activity, parsed, stream_details)
     db.commit()
     db.refresh(activity)

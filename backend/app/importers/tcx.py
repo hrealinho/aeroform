@@ -1,7 +1,14 @@
 from datetime import datetime
 import xml.etree.ElementTree as ET
-from app.importers.common import ParsedActivity
+from app.importers.common import ParsedActivity, ParsedLap
 from app.metrics.terrain import elevation_gain_loss
+
+
+def _float(text: str | None) -> float | None:
+    try:
+        return float(text) if text else None
+    except ValueError:
+        return None
 
 
 def parse_tcx(path: str) -> ParsedActivity:
@@ -19,9 +26,26 @@ def parse_tcx(path: str) -> ParsedActivity:
     streams = []
     hrs = []
     cadences = []
-    for lap in laps:
-        duration += float((lap.findtext("{*}TotalTimeSeconds") or 0))
-        distance += float((lap.findtext("{*}DistanceMeters") or 0))
+    # Laps were being summed into totals and then thrown away.
+    parsed_laps: list[ParsedLap] = []
+    for lap_index, lap in enumerate(laps):
+        lap_seconds = float((lap.findtext("{*}TotalTimeSeconds") or 0))
+        lap_metres = float((lap.findtext("{*}DistanceMeters") or 0))
+        duration += lap_seconds
+        distance += lap_metres
+        lap_start = lap.attrib.get("StartTime")
+        parsed_laps.append(ParsedLap(
+            index=lap_index,
+            start_time=datetime.fromisoformat(lap_start.replace("Z", "+00:00")) if lap_start else None,
+            elapsed_s=lap_seconds or None,
+            moving_s=lap_seconds or None,
+            distance_m=lap_metres or None,
+            avg_hr=_float(lap.findtext("{*}AverageHeartRateBpm/{*}Value")),
+            max_hr=_float(lap.findtext("{*}MaximumHeartRateBpm/{*}Value")),
+            max_speed_mps=_float(lap.findtext("{*}MaximumSpeed")),
+            avg_speed_mps=(lap_metres / lap_seconds) if lap_seconds > 0 and lap_metres > 0 else None,
+            trigger=lap.findtext("{*}TriggerMethod"),
+        ))
         for tp in lap.findall(".//{*}Trackpoint"):
             time_text = tp.findtext("{*}Time")
             hr_text = tp.findtext("{*}HeartRateBpm/{*}Value")
@@ -57,5 +81,6 @@ def parse_tcx(path: str) -> ParsedActivity:
         max_hr=(max(hrs) if hrs else None),
         avg_cadence=(sum(cadences) / len(cadences) if cadences else None),
         streams=streams,
+        laps=parsed_laps,
         source_metadata={"raw_sport": raw_sport, "classification_ambiguous": sport == "other"},
     )

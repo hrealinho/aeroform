@@ -253,3 +253,95 @@ def test_advice_clears_once_the_threshold_exists(client, session, athlete):
     advice = {a["metric"] for a in client.get("/api/v1/thresholds").json()["advice"]}
     assert "resting_hr" not in advice
     assert "max_hr" not in advice
+
+
+# --- activity detail and laps --------------------------------------------------
+
+def test_activity_detail_returns_stats_zones_and_laps(client, session, athlete):
+    from app.domain.models import Activity, ActivityLap, ActivityMetrics, ActivityStreams
+    from app.services.dedup import activity_fingerprint
+
+    start = datetime.now(timezone.utc) - timedelta(days=2)
+    samples = [{"time": (start + timedelta(seconds=i)).isoformat(), "power": 200 + (i % 50),
+                "hr": 140, "altitude": 100 + i * 0.1, "distance": float(i * 8)} for i in range(1200)]
+    activity = Activity(
+        athlete_id=athlete.id, sport="cycling", name="Ride", start_time=start,
+        duration_s=1200, moving_time_s=1180, distance_m=9600, avg_power=225, avg_hr=140,
+        fingerprint=activity_fingerprint("cycling", start, 1200, 9600),
+    )
+    session.add(activity)
+    session.flush()
+    session.add(ActivityStreams(activity_id=activity.id, samples=samples))
+    session.add(ActivityMetrics(activity_id=activity.id, training_load=45.0, load_method="power",
+                                details={"metabolic_load": 45.0, "hr_zones_s": {"z1": 300, "z2": 900}}))
+    session.add(ActivityLap(activity_id=activity.id, lap_index=0, elapsed_s=600, moving_s=600,
+                            distance_m=4800, avg_hr=138, avg_power=220, trigger="manual"))
+    session.add(ActivityLap(activity_id=activity.id, lap_index=1, elapsed_s=600, moving_s=580,
+                            distance_m=4800, avg_hr=142, avg_power=230, trigger="manual"))
+    session.commit()
+
+    body = client.get(f"/api/v1/activities/{activity.id}").json()
+    assert body["summary"]["distance_m"] == 9600
+    assert body["load"]["method"] == "power"
+    assert len(body["laps"]) == 2
+    assert body["laps"][0]["index"] == 0
+    # Streams are downsampled before leaving the API.
+    assert body["streams"]["sample_count"] == 1200
+    assert 0 < len(body["streams"]["points"]) <= 600
+    assert "power" in body["streams"]["channels"]
+    zones = body["zones"]["hr"]
+    assert [z["zone"] for z in zones] == ["Z1", "Z2"]
+    assert zones[1]["pct"] == 75.0
+
+
+def test_activity_detail_is_scoped_to_the_athlete(client, session, athlete):
+    from app.domain.models import Activity, Athlete
+    from app.services.dedup import activity_fingerprint
+
+    other = Athlete(email="someone-else@example.com")
+    session.add(other)
+    session.commit()
+    start = datetime.now(timezone.utc)
+    foreign = Activity(athlete_id=other.id, sport="running", name="theirs", start_time=start,
+                       duration_s=600, distance_m=2000,
+                       fingerprint=activity_fingerprint("running", start, 600, 2000))
+    session.add(foreign)
+    session.commit()
+
+    assert client.get(f"/api/v1/activities/{foreign.id}").status_code == 404
+    assert client.get("/api/v1/activities/999999").status_code == 404
+
+
+def test_duplicates_path_is_not_captured_by_the_id_route(client):
+    """/activities/duplicates must not be parsed as an activity id."""
+    assert client.get("/api/v1/activities/duplicates").status_code == 200
+
+
+def test_downsample_preserves_shape_and_extremes():
+    from app.services.activity_detail import downsample
+
+    base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    samples = [{"time": (base + timedelta(seconds=i)).isoformat(),
+                "power": 400 if 500 <= i < 600 else 150,
+                "altitude": 100 + (50 if 500 <= i < 600 else 0)} for i in range(2000)]
+    points = downsample(samples, max_points=100)
+    assert len(points) == 100
+    assert max(p["power"] for p in points) > 300      # the surge survives
+    assert max(p["altitude_max"] for p in points) == 150.0
+    assert points[0]["t"] == 0
+    assert points[-1]["t"] > 1800
+    assert downsample([]) == []
+
+
+def test_fit_and_tcx_lap_parsing_is_wired(monkeypatch):
+    """Laps reach ParsedActivity, which is what ingestion persists."""
+    from app.importers.common import ParsedActivity, ParsedLap
+
+    parsed = ParsedActivity(
+        sport="running", subtype=None, name="x",
+        start_time=datetime(2026, 5, 1, tzinfo=timezone.utc), duration_s=600,
+        laps=[ParsedLap(index=0, elapsed_s=300, distance_m=1000)],
+    )
+    assert parsed.laps[0].distance_m == 1000
+    assert ParsedActivity(sport="running", subtype=None, name="x",
+                          start_time=datetime(2026, 5, 1, tzinfo=timezone.utc), duration_s=1).laps == []

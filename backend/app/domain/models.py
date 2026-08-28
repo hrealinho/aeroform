@@ -82,6 +82,7 @@ class Activity(Base):
     sources: Mapped[list[ActivitySource]] = relationship(back_populates="activity", cascade="all, delete-orphan")
     metrics: Mapped[ActivityMetrics | None] = relationship(back_populates="activity", cascade="all, delete-orphan", uselist=False)
     streams: Mapped[ActivityStreams | None] = relationship(back_populates="activity", cascade="all, delete-orphan", uselist=False)
+    laps: Mapped[list[ActivityLap]] = relationship(back_populates="activity", cascade="all, delete-orphan", order_by="ActivityLap.lap_index")
 
 
 class ActivitySource(Base):
@@ -102,6 +103,37 @@ class ActivityStreams(Base):
     activity_id: Mapped[int] = mapped_column(ForeignKey("activities.id"), unique=True)
     samples: Mapped[list] = mapped_column(JSON, default=list)
     activity: Mapped[Activity] = relationship(back_populates="streams")
+
+
+class ActivityLap(Base):
+    """Laps and splits as recorded by the source.
+
+    A separate table rather than a JSON blob on the activity, because laps are
+    queried and ordered independently and there can be hundreds of them.
+    """
+
+    __tablename__ = "activity_laps"
+    __table_args__ = (UniqueConstraint("activity_id", "lap_index", name="uq_activity_lap_index"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    activity_id: Mapped[int] = mapped_column(ForeignKey("activities.id", ondelete="CASCADE"), index=True)
+    lap_index: Mapped[int] = mapped_column(Integer)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    elapsed_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    moving_s: Mapped[float | None] = mapped_column(Float, nullable=True)
+    distance_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    elevation_gain_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    elevation_loss_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_hr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_hr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_power: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_power: Mapped[float | None] = mapped_column(Float, nullable=True)
+    normalized_power: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_cadence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    avg_speed_mps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_speed_mps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    trigger: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    activity: Mapped[Activity] = relationship(back_populates="laps")
 
 
 class ActivityMetrics(Base):

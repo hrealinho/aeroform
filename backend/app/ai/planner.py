@@ -110,7 +110,22 @@ def generate_week_seed(context: dict, week_start: date, objective_id: int | None
     targets = block.get("targets") or {}
 
     typical_h = float(context.get("state", {}).get("typical_weekly_hours_8w") or 0)
-    target_h = float(targets.get("weekly_hours") or profile.get("available_hours_per_week") or (typical_h * 1.03 if typical_h else (8 if sport == "cycling" else 6)))
+    # A block's weekly_load target is honoured as well as weekly_hours. The Season UI
+    # writes weekly_load, and reading only weekly_hours meant the target an athlete
+    # typed into a training block had no effect on anything the planner produced.
+    target_load = float(targets.get("weekly_load") or 0)
+    typical_load = float(context.get("state", {}).get("typical_weekly_load_8w") or 0)
+    implied_h = 0.0
+    if target_load > 0 and typical_load > 0 and typical_h > 0:
+        # Convert the load target into hours using the athlete's own recent load-per-hour,
+        # so the two target styles cannot disagree about the same week.
+        implied_h = target_load / (typical_load / typical_h)
+    target_h = float(
+        targets.get("weekly_hours")
+        or implied_h
+        or profile.get("available_hours_per_week")
+        or (typical_h * 1.03 if typical_h else (8 if sport == "cycling" else 6))
+    )
     phase = str(block.get("type") or "base").lower()
     phase_factor = {"recovery": 0.7, "taper": 0.65, "peak": 0.9, "build": 1.05, "specific": 1.05}.get(phase, 1.0)
     target_h *= phase_factor

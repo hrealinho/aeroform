@@ -25,7 +25,7 @@ from app.services.oauth_state import create_state, verify_state
 from app.services.token_crypto import encrypt_token
 from app.tasks.imports import process_uploaded_files, sync_strava_history, sync_strava_activity, remove_strava_activity, recompute_athlete_metrics
 from app.importers.formats import activity_format
-from app.ai.context import build_athlete_context
+from app.ai.context import build_athlete_context, PLAN_HORIZON_DAYS
 from app.ai.analyst import analyse_question
 from app.ai.provider import get_provider
 from app.ai.planner import generate_week_seed, adapt_week_seed
@@ -37,6 +37,7 @@ from app.metrics.power_profile import curve_payload
 from app.metrics.race_predictor import predict as predict_races
 from app.services.dedup import activity_fingerprint
 from app.services.duplicates import find_duplicate_groups, delete_activity
+from app.services.activity_detail import activity_detail
 
 router = APIRouter(prefix="/api/v1")
 
@@ -162,6 +163,16 @@ def remove_activity(activity_id: int, db: Session = Depends(get_db)):
     athlete = demo_athlete(db)
     if not delete_activity(db, athlete.id, activity_id):
         raise HTTPException(404, "Activity not found")
+
+
+@router.get("/activities/{activity_id}")
+def activity_detail_route(activity_id: int, db: Session = Depends(get_db)):
+    """Full detail for one activity: summary, load breakdown, zones, laps and streams."""
+    athlete = demo_athlete(db)
+    detail = activity_detail(db, athlete.id, activity_id)
+    if detail is None:
+        raise HTTPException(404, "Activity not found")
+    return detail
 
 @router.patch("/activities/{activity_id}/classification")
 def update_activity_classification(activity_id: int, payload: ActivityClassificationUpdate, db: Session = Depends(get_db)):
@@ -988,6 +999,9 @@ def _compact_context(context: dict) -> dict:
         "as_of": context.get("as_of"), "state": context.get("state"), "objectives": context.get("objectives"),
         "current_block": context.get("current_block"), "profile": context.get("profile"),
         "recent_weeks": context.get("recent_weeks", [])[-8:], "adherence_28d_pct": context.get("adherence_28d_pct"),
+        # Kept so the audit trail shows the plan the model was actually reasoning over.
+        "planned_count": len(context.get("planned") or []),
+        "plan_horizon_days": PLAN_HORIZON_DAYS,
     }
 
 

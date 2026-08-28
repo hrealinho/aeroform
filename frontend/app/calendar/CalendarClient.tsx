@@ -23,18 +23,23 @@ const hours=formatDuration;
 function km(m?:number){return m ? `${Math.round(m/100)/10} km` : ""}
 function dayLabel(d:Date){return d.toLocaleDateString(undefined,{weekday:"short",day:"numeric",month:"short"})}
 
+// Planning happens in blocks, not single weeks, so the calendar has to show one.
+const RANGES=[{weeks:1,label:"Week"},{weeks:4,label:"4 weeks"},{weeks:8,label:"8 weeks"},{weeks:13,label:"3 months"}];
+
 export default function CalendarClient(){
   const [week,setWeek]=useState(()=>mondayFor(new Date()));
+  const [weeksShown,setWeeksShown]=useState(4);
   const [data,setData]=useState<CalendarData>({planned:[],activities:[],objectives:[],blocks:[]});
   const [projection,setProjection]=useState<Projection>({warnings:[],weeks:[]});
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState("");
   const [why,setWhy]=useState<{title:string;reasons:string[];evidence:any[]}|null>(null);
   const [form,setForm]=useState({date:isoDate(new Date()),time:"18:00",sport:"running",name:"Easy run",durationMin:"60",distanceKm:"",elevationM:"",intensity:"easy",warmupMin:"",reps:"",workMin:"",recoveryMin:"",cooldownMin:""});
-  const days=useMemo(()=>Array.from({length:7},(_,i)=>{const d=new Date(week);d.setDate(d.getDate()+i);return d}),[week]);
-  const start=isoDate(days[0]); const end=isoDate(days[6]);
+  const days=useMemo(()=>Array.from({length:7*weeksShown},(_,i)=>{const d=new Date(week);d.setDate(d.getDate()+i);return d}),[week,weeksShown]);
+  const weekRows=useMemo(()=>Array.from({length:weeksShown},(_,w)=>days.slice(w*7,w*7+7)),[days,weeksShown]);
+  const start=isoDate(days[0]); const end=isoDate(days[days.length-1]);
   const fetchStart=useMemo(()=>{const d=new Date(days[0]);d.setDate(d.getDate()-1);return isoDate(d)},[days]);
-  const fetchEnd=useMemo(()=>{const d=new Date(days[6]);d.setDate(d.getDate()+1);return isoDate(d)},[days]);
+  const fetchEnd=useMemo(()=>{const d=new Date(days[days.length-1]);d.setDate(d.getDate()+1);return isoDate(d)},[days]);
 
   const load=useCallback(async()=>{
     setLoading(true);setError("");
@@ -83,14 +88,20 @@ export default function CalendarClient(){
   async function autoMatch(){
     const r=await fetch(`${API}/matching/auto?start=${start}&end=${end}`,{method:"POST"});if(!r.ok){setError(await r.text());return}await load();
   }
-  function changeWeek(delta:number){const d=new Date(week);d.setDate(d.getDate()+delta*7);setWeek(d)}
+  function changeWeek(delta:number){const d=new Date(week);d.setDate(d.getDate()+delta*7*weeksShown);setWeek(d)}
 
   const weekLoad=data.planned.reduce((s,w)=>s+(w.projected_load||0),0);
   const actualLoad=data.activities.reduce((s,a)=>s+(a.training_load||0),0);
   return <>
     <div className="row spread calendarHeader">
       <div><h1>Calendar</h1><p className="muted">Plan the week, compare actual training, and see load consequences before you move sessions.</p></div>
-      <div className="row"><button className="button secondary" onClick={()=>changeWeek(-1)}>Previous</button><button className="button secondary" onClick={()=>setWeek(mondayFor(new Date()))}>Today</button><button className="button secondary" onClick={()=>changeWeek(1)}>Next</button></div>
+      <div className="row">
+        {RANGES.map(r=><button key={r.weeks} className={weeksShown===r.weeks?"button":"button secondary"} onClick={()=>setWeeksShown(r.weeks)}>{r.label}</button>)}
+        <span className="calendarNavGap"/>
+        <button className="button secondary" onClick={()=>changeWeek(-1)}>Previous</button>
+        <button className="button secondary" onClick={()=>setWeek(mondayFor(new Date()))}>Today</button>
+        <button className="button secondary" onClick={()=>changeWeek(1)}>Next</button>
+      </div>
     </div>
 
     <div className="grid section planningMetrics">
@@ -103,8 +114,31 @@ export default function CalendarClient(){
     {projection.warnings.length>0 && <div className="section warningStack">{projection.warnings.map((w,i)=><div className={`warning ${w.severity}`} key={i}><strong>Plan warning</strong><span>{w.message}</span></div>)}</div>}
     {error && <div className="card section errorText">{error}</div>}
 
-    <div className="weekGrid section">
-      {days.map(day=>{
+    <div className="section calendarRange">
+      <div className="muted">{new Date(days[0]).toLocaleDateString(undefined,{day:"numeric",month:"short"})} - {new Date(days[days.length-1]).toLocaleDateString(undefined,{day:"numeric",month:"short",year:"numeric"})}</div>
+    </div>
+    {weekRows.map((rowDays,rowIndex)=>{
+      const rowStart=isoDate(rowDays[0]), rowEnd=isoDate(rowDays[6]);
+      const rowPlanned=data.planned.filter(w=>{const d=localISODateOf(w.scheduled_at);return d>=rowStart&&d<=rowEnd});
+      const rowActual=data.activities.filter(a=>{const d=localISODateOf(a.start_time);return d>=rowStart&&d<=rowEnd});
+      const plannedLoad=rowPlanned.reduce((s,w)=>s+(w.projected_load||0),0);
+      const actualLoad=rowActual.reduce((s,a)=>s+(a.training_load||0),0);
+      const plannedHours=rowPlanned.reduce((s,w)=>s+(w.duration_s||0),0);
+      return <section className="weekRow section" key={rowStart}>
+        <header className="weekRowHeader">
+          <div className="row">
+            <b>{new Date(rowDays[0]).toLocaleDateString(undefined,{day:"numeric",month:"short"})}</b>
+            <span className="muted">week {rowIndex+1} of {weeksShown}</span>
+          </div>
+          <div className="row">
+            <span className="badge">planned {plannedLoad.toFixed(0)}</span>
+            {actualLoad>0&&<span className="badge success">actual {actualLoad.toFixed(0)}</span>}
+            {plannedHours>0&&<span className="badge">{hours(plannedHours)}</span>}
+            <span className="badge">{rowPlanned.length} sessions</span>
+          </div>
+        </header>
+        <div className="weekGrid">
+      {rowDays.map(day=>{
         const ds=isoDate(day);
         const planned=data.planned.filter(w=>localISODateOf(w.scheduled_at)===ds);
         const actual=data.activities.filter(a=>localISODateOf(a.start_time)===ds);
@@ -126,7 +160,9 @@ export default function CalendarClient(){
           </div>
         </section>
       })}
-    </div>
+        </div>
+      </section>;
+    })}
 
     <div className="twoCol section">
       <form className="card" onSubmit={createWorkout}><h2>Add planned workout</h2><div className="formGrid">

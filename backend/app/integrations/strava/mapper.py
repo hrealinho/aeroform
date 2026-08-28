@@ -2,7 +2,7 @@ from __future__ import annotations
 from datetime import datetime, timezone, timedelta
 from math import atan2, cos, radians, sin, sqrt
 
-from app.importers.common import ParsedActivity
+from app.importers.common import ParsedActivity, ParsedLap
 from app.metrics.terrain import terrain_stream_metrics
 
 
@@ -82,7 +82,42 @@ def estimate_elevation_loss(data: dict, gain: float | None) -> tuple[float | Non
     }
 
 
-def map_activity(data: dict, streams: dict[str, list] | None = None) -> ParsedActivity:
+def map_laps(laps: list[dict] | None) -> list[ParsedLap]:
+    """Map Strava's /activities/{id}/laps payload.
+
+    Only available on the detailed endpoint, so a summary-only backfill has none.
+    """
+    if not isinstance(laps, list):
+        return []
+    out: list[ParsedLap] = []
+    for index, lap in enumerate(sorted(laps, key=lambda l: l.get("lap_index") or 0)):
+        if not isinstance(lap, dict):
+            continue
+        elapsed = _f(lap.get("elapsed_time"))
+        distance = _f(lap.get("distance"))
+        out.append(ParsedLap(
+            index=index,
+            name=lap.get("name"),
+            start_time=_dt(lap["start_date"]) if lap.get("start_date") else None,
+            elapsed_s=elapsed,
+            moving_s=_f(lap.get("moving_time")),
+            distance_m=distance,
+            elevation_gain_m=_f(lap.get("total_elevation_gain")),
+            avg_hr=_f(lap.get("average_heartrate")),
+            max_hr=_f(lap.get("max_heartrate")),
+            avg_power=_f(lap.get("average_watts")),
+            avg_cadence=_f(lap.get("average_cadence")),
+            avg_speed_mps=_f(lap.get("average_speed")),
+            max_speed_mps=_f(lap.get("max_speed")),
+        ))
+    return out
+
+
+def _f(value) -> float | None:
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def map_activity(data: dict, streams: dict[str, list] | None = None, laps: list[dict] | None = None) -> ParsedActivity:
     sport_type = data.get("sport_type") or data.get("type") or "Other"
     sport = SPORT_MAP.get(sport_type, "other")
     stream_samples: list[dict] = []
@@ -136,6 +171,7 @@ def map_activity(data: dict, streams: dict[str, list] | None = None) -> ParsedAc
         avg_cadence=float(data["average_cadence"]) if data.get("average_cadence") is not None else None,
         rpe=float(data["perceived_exertion"]) if data.get("perceived_exertion") is not None else None,
         streams=stream_samples,
+        laps=map_laps(laps),
         source_metadata={
             "strava_id": str(data.get("id")),
             "device_name": data.get("device_name"),

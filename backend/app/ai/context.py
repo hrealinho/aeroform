@@ -13,6 +13,10 @@ from app.metrics.fitness import ewma_series
 from app.planning.workouts import infer_intensity
 
 
+# How far ahead the coach sees planned work. Matches the calendar's longest view.
+PLAN_HORIZON_DAYS = 98
+
+
 def _dt(day: date, end: bool = False) -> datetime:
     return datetime.combine(day, datetime.max.time() if end else datetime.min.time())
 
@@ -163,8 +167,12 @@ def build_athlete_context(db: Session, athlete: Athlete, today: date | None = No
         "preferences": profile.preferences if profile else {},
     }
 
+    # The plan horizon has to cover what the athlete can actually plan. At 21 days the
+    # coach could not see, reason about, or avoid colliding with anything in a
+    # three-month block, and "existing planned workouts are preserved" was only true
+    # for the next three weeks.
     plan_start = today - timedelta(days=28)
-    plan_end = today + timedelta(days=21)
+    plan_end = today + timedelta(days=PLAN_HORIZON_DAYS)
     planned = list(db.scalars(select(PlannedWorkout).where(
         PlannedWorkout.athlete_id == athlete.id,
         PlannedWorkout.scheduled_at >= _dt(plan_start),

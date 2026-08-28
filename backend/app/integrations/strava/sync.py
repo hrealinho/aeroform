@@ -105,7 +105,14 @@ def sync_activity(db: Session, athlete_id: int, strava_activity_id: int, import_
         except Exception:
             # Streams are enrichment, not a reason to lose the activity.
             streams = None
-    parsed = map_activity(activity_data, streams if isinstance(streams, dict) else None)
+    laps = None
+    try:
+        laps, _ = api_get(db, connection, f"/activities/{strava_activity_id}/laps")
+    except Exception:
+        # Laps are enrichment, not a reason to lose the activity.
+        laps = None
+    parsed = map_activity(activity_data, streams if isinstance(streams, dict) else None,
+                          laps if isinstance(laps, list) else None)
     activity, duplicate = ingest_parsed(
         db,
         athlete_id,

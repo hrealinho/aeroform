@@ -40,3 +40,29 @@ def test_matching_prefers_same_sport_close_in_time_and_duration():
     score=activity_match_score(workout, activity)
     assert score.score > 0.9
     assert "same sport" in score.reasons
+
+
+def test_block_weekly_load_target_changes_the_plan():
+    """Regression: the Season UI writes targets.weekly_load but the planner only read
+    targets.weekly_hours, so the target an athlete typed in did nothing at all."""
+    from app.ai.planner import generate_week_seed
+    from app.planning.workouts import estimate_planned_load
+
+    base = {
+        "as_of": "2026-08-27",
+        "history": {"activity_count": 200},
+        "state": {"typical_weekly_load_8w": 400, "typical_weekly_hours_8w": 8},
+        "sports_28d": {"running": {"load": 400}},
+        "objectives": [], "constraints": [], "planned": [],
+        "profile": {"preferred_long_day": 5, "preferred_rest_day": 0},
+    }
+
+    def planned_load(targets):
+        context = {**base, "current_block": {"id": 1, "name": "B", "type": "base", "targets": targets}}
+        _, commands = generate_week_seed(context, date(2026, 8, 31))
+        return sum(estimate_planned_load(c.get("duration_s"), c.get("steps"), c.get("intensity")).load
+                   for c in commands)
+
+    small = planned_load({"weekly_load": 250})
+    large = planned_load({"weekly_load": 650})
+    assert large > small * 1.3, (small, large)

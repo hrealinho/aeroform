@@ -1,9 +1,13 @@
 from datetime import datetime, timezone
 from fitparse import FitFile
-from app.importers.common import ParsedActivity
+from app.importers.common import ParsedActivity, ParsedLap
 
 
 TRAIL_SUBSPORTS = {"trail", "ultra", "cross_country", "mountain_running"}
+
+
+def _number(value) -> float | None:
+    return float(value) if isinstance(value, (int, float)) else None
 
 
 def _fit_sport(raw_sport: str | None, raw_sub_sport: str | None) -> str:
@@ -30,6 +34,33 @@ def parse_fit(path: str) -> ParsedActivity:
     for msg in fit.get_messages("session"):
         session_values.update({f.name: f.value for f in msg})
         break
+
+    # FIT carries a `lap` message per lap. Only `session` and `record` were being read,
+    # so every lap the device recorded was discarded on import.
+    laps: list[ParsedLap] = []
+    for index, msg in enumerate(fit.get_messages("lap")):
+        v = {f.name: f.value for f in msg}
+        start = v.get("start_time")
+        if isinstance(start, datetime) and start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        laps.append(ParsedLap(
+            index=index,
+            start_time=start if isinstance(start, datetime) else None,
+            elapsed_s=_number(v.get("total_elapsed_time")),
+            moving_s=_number(v.get("total_timer_time")),
+            distance_m=_number(v.get("total_distance")),
+            elevation_gain_m=_number(v.get("total_ascent")),
+            elevation_loss_m=_number(v.get("total_descent")),
+            avg_hr=_number(v.get("avg_heart_rate")),
+            max_hr=_number(v.get("max_heart_rate")),
+            avg_power=_number(v.get("avg_power")),
+            max_power=_number(v.get("max_power")),
+            normalized_power=_number(v.get("normalized_power")),
+            avg_cadence=_number(v.get("avg_cadence")),
+            avg_speed_mps=_number(v.get("enhanced_avg_speed") if v.get("enhanced_avg_speed") is not None else v.get("avg_speed")),
+            max_speed_mps=_number(v.get("enhanced_max_speed") if v.get("enhanced_max_speed") is not None else v.get("max_speed")),
+            trigger=str(v["lap_trigger"]) if v.get("lap_trigger") is not None else None,
+        ))
 
     raw_sport = str(session_values.get("sport", "other"))
     raw_sub_sport = str(session_values.get("sub_sport")) if session_values.get("sub_sport") is not None else None
@@ -93,6 +124,7 @@ def parse_fit(path: str) -> ParsedActivity:
         normalized_power=float(session_values.get("normalized_power")) if session_values.get("normalized_power") else None,
         avg_cadence=float(session_values.get("avg_cadence")) if session_values.get("avg_cadence") else None,
         streams=streams,
+        laps=laps,
         source_metadata={
             "manufacturer": str(session_values.get("manufacturer", "")),
             "raw_sport": raw_sport,
