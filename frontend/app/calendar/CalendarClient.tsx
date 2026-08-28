@@ -2,6 +2,7 @@
 
 import {useCallback, useEffect, useMemo, useState} from "react";
 import {API} from "@/lib/api";
+import Icon from "@/components/Icon";
 import {formatDuration, formatDurationHours, localDateTimeToUTC, localISODate, localISODateOf} from "@/lib/datetime";
 
 const SPORTS = ["running", "trail_running", "cycling", "hiking", "mountaineering", "climbing"];
@@ -89,7 +90,7 @@ export default function CalendarClient(){
   return <>
     <div className="row spread calendarHeader">
       <div><h1>Calendar</h1><p className="muted">Plan the week, compare actual training, and see load consequences before you move sessions.</p></div>
-      <div className="row"><button className="button secondary" onClick={()=>changeWeek(-1)}>← Previous</button><button className="button secondary" onClick={()=>setWeek(mondayFor(new Date()))}>Today</button><button className="button secondary" onClick={()=>changeWeek(1)}>Next →</button></div>
+      <div className="row"><button className="button secondary" onClick={()=>changeWeek(-1)}>Previous</button><button className="button secondary" onClick={()=>setWeek(mondayFor(new Date()))}>Today</button><button className="button secondary" onClick={()=>changeWeek(1)}>Next</button></div>
     </div>
 
     <div className="grid section planningMetrics">
@@ -114,7 +115,7 @@ export default function CalendarClient(){
           {objective.map(o=><div className="objectiveCard" key={o.id}><b>{o.priority}</b> {o.name}</div>)}
           <div className="daySessions">
             {planned.map(w=><article draggable={!w.locked} onDragStart={e=>e.dataTransfer.setData("workoutId",String(w.id))} className={`workoutCard ${w.matched_activity_id?"matched":""}`} key={w.id}>
-              <div className="row spread"><span className="sportLabel">{w.sport.replace("_"," ")}</span><span>{w.locked?"🔒":""}</span></div>
+              <div className="row spread"><span className="sportLabel">{w.sport.replace("_"," ")}</span><span>{w.locked?<Icon name="lock" size={12}/>:null}</span></div>
               <strong>{w.name}</strong>
               <div className="workoutMeta"><span>{hours(w.duration_s)}</span><span>{km(w.distance_m)}</span><span>Load {Math.round(w.projected_load||0)}</span></div>
               <div className="row"><span className="badge">{w.intensity}</span>{w.matched_activity_id&&<span className="badge success">matched</span>}</div>

@@ -1,319 +1,316 @@
 /* ===========================================================================
    Aeroform design tokens
    ---------------------------------------------------------------------------
-   One source of truth for surface, ink, spacing and chart colour. Components
-   reference roles (--surface-2, --series-fatigue) rather than raw hex, so a
-   theme change happens here and nowhere else.
+   One principle: chrome is monochrome, colour belongs to data. Buttons, nav,
+   borders and text are neutral greys, so the only saturated things on screen are
+   marks in a chart or a status that has to be noticed. That keeps a dense data
+   tool readable and stops the UI competing with its own charts.
+
+   Geometry is deliberately tight - 4-8px radii, hairline borders, almost no
+   shadow - because this is an instrument panel, not a landing page.
 
    Chart colours are not chosen by eye. The categorical slots are the dataviz
-   reference hues stepped for a dark surface, validated against this file's
-   --surface-2 (#141b31) for lightness band, chroma floor, colourblind
-   separation, normal-vision separation and 3:1 contrast. Fitness/fatigue/form
-   pass on all pairs; the four stack slots pass on adjacent pairs, which is the
-   pairlist that applies to stacked bars. Re-run the validator before changing
-   any of them.
+   reference hues stepped for a dark surface, validated against --surface-2 for
+   lightness band, chroma floor, colourblind separation, normal-vision separation
+   and 3:1 contrast. Fitness/fatigue/form pass on all pairs; the four stack slots
+   pass on adjacent pairs, the pairlist that applies to stacked bars. Re-run
+   scripts/validate_palette.js before changing any of them or the surface.
    =========================================================================== */
 :root {
   color-scheme: dark;
 
-  /* Surfaces, lightest content sitting on the darkest page */
-  --surface-0: #0b1020;
-  --surface-1: #0d1324;
-  --surface-2: #141b31;
-  --surface-3: #1a2340;
-  --surface-input: #0f1629;
+  /* Surfaces: neutral graphite, a hint of blue, no purple cast */
+  --surface-0: #0e1116;
+  --surface-1: #12151c;
+  --surface-2: #161a21;
+  --surface-3: #1d222b;
+  --surface-4: #252b36;
+  --surface-input: #0f1218;
 
-  /* Lines */
-  --border: #283250;
-  --border-strong: #34406a;
+  --border: #252a34;
+  --border-strong: #333a47;
 
-  /* Ink */
-  --ink-1: #eef2ff;
-  --ink-2: #b8c1df;
-  --ink-3: #98a4c7;
+  --ink-1: #e8ecf3;
+  --ink-2: #a8b1c1;
+  --ink-3: #757e8e;
 
-  /* Brand */
-  --accent: #6c7cff;
-  --accent-hover: #8290ff;
-  --accent-ink: #ffffff;
+  /* Primary action is near-white on dark. A saturated accent button is the single
+     biggest tell of a template; a high-contrast neutral reads as a tool. */
+  --accent: #e8ecf3;
+  --accent-hover: #ffffff;
+  --accent-ink: #12151c;
+  /* Colour appears in exactly one piece of chrome: the logo mark. */
+  --accent-mark: #4f8ef7;
+  --focus: #4f8ef7;
 
   /* Status. Reserved: never reused as a series colour. */
   --good: #199e70;
   --warning: #c98500;
-  --serious: #d95926;
   --critical: #e66767;
 
   /* Categorical series slots, validated dark steps */
-  --series-1: #3987e5; /* blue */
-  --series-2: #d95926; /* orange */
-  --series-3: #199e70; /* aqua */
-  --series-4: #c98500; /* yellow */
-  --series-5: #d55181; /* magenta */
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
 
-  /* Semantic chart roles. Matches the convention endurance athletes already
-     read elsewhere: fitness cool, fatigue warm-pink, form yellow. */
   --series-fitness: var(--series-1);
   --series-fatigue: var(--series-5);
   --series-form: var(--series-4);
-  /* A comparison period is a reference, not another category, so it is a muted
-     neutral rather than a second hue. Blue + violet failed CVD separation. */
-  --series-reference: #7d89b0;
+  --series-reference: #6f7889;
 
-  --grid: rgba(152, 164, 199, 0.14);
+  --grid: rgba(168, 177, 193, 0.11);
 
-  /* Shape and depth */
-  --r-sm: 8px;
-  --r-md: 12px;
-  --r-lg: 16px;
+  --r-xs: 3px;
+  --r-sm: 5px;
+  --r-md: 7px;
+  --r-lg: 9px;
   --r-pill: 999px;
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.28);
-  --shadow-2: 0 10px 30px rgba(0, 0, 0, 0.32);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
 
-  /* Type scale */
   --fs-xs: 11px;
-  --fs-sm: 13px;
-  --fs-md: 14px;
-  --fs-lg: 16px;
-  --fs-xl: 20px;
-  --fs-2xl: 26px;
-  --fs-3xl: 34px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 18px;
+  --fs-2xl: 22px;
+  --fs-3xl: 30px;
 
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* System stack: renders natively everywhere and avoids the webfont look. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* Numbers get a mono face. In a training log the figures are the content. */
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  font-family: var(--font-sans);
   font-size: var(--fs-md);
   background: var(--surface-0);
   color: var(--ink-1);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 * { box-sizing: border-box; }
 
-body {
-  margin: 0;
-  background: radial-gradient(1200px 600px at 70% -10%, #17203c 0%, transparent 60%), var(--surface-0);
-  min-height: 100vh;
-}
+/* Flat. The previous radial gradient was decoration competing with the charts. */
+body { margin: 0; background: var(--surface-0); min-height: 100vh; }
 
 a { color: inherit; text-decoration: none; }
 
-h1 { font-size: var(--fs-2xl); font-weight: 800; letter-spacing: -0.02em; margin: 0 0 6px; }
-h2 { font-size: var(--fs-lg); font-weight: 700; letter-spacing: -0.01em; margin: 0 0 4px; }
-h3 { font-size: var(--fs-md); font-weight: 700; margin: 0 0 4px; }
-p  { margin: 0 0 4px; line-height: 1.55; }
+h1 { font-size: var(--fs-xl); font-weight: 600; letter-spacing: -0.01em; margin: 0 0 3px; }
+h2 { font-size: var(--fs-md); font-weight: 600; margin: 0 0 3px; letter-spacing: .01em; }
+h3 { font-size: var(--fs-sm); font-weight: 600; margin: 0 0 3px; color: var(--ink-2); }
+p  { margin: 0 0 3px; line-height: 1.5; }
+
+/* Numerals never reflow between values. */
+.metric, .metricBig, .metricSmall, .table td, .workoutMeta, .connectionStats,
+.chartTooltipValue, .listRow b { font-variant-numeric: tabular-nums; }
+
+.icon { flex: 0 0 auto; vertical-align: -2px; }
 
 /* ------------------------------ layout ---------------------------------- */
-.shell { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
+.shell { display: grid; grid-template-columns: 204px 1fr; min-height: 100vh; }
 
 .sidebar {
-  padding: 22px 14px;
-  border-right: 1px solid var(--border);
-  background: var(--surface-1);
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  overflow-y: auto;
+  padding: 14px 10px; border-right: 1px solid var(--border);
+  background: var(--surface-1); position: sticky; top: 0; height: 100vh; overflow-y: auto;
 }
 .brand {
-  font-size: var(--fs-xl); font-weight: 800; letter-spacing: -0.02em;
-  margin: 0 8px 24px; display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px 18px;
+  font-size: var(--fs-lg); font-weight: 600; letter-spacing: -0.01em; color: var(--ink-1);
 }
-.brand::before {
-  content: ""; width: 9px; height: 9px; border-radius: 3px;
-  background: var(--accent); box-shadow: 0 0 14px var(--accent);
-}
-.nav { display: grid; gap: 2px; }
+.nav { display: grid; gap: 1px; }
 .nav a {
-  padding: 9px 12px; border-radius: var(--r-sm); color: var(--ink-2);
-  font-size: var(--fs-md); font-weight: 500;
-  transition: background .13s ease, color .13s ease;
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 9px; border-radius: var(--r-sm); color: var(--ink-2);
+  font-size: var(--fs-md); transition: background .1s ease, color .1s ease;
 }
+.nav a .icon { color: var(--ink-3); transition: color .1s ease; }
 .nav a:hover { background: var(--surface-3); color: var(--ink-1); }
-.nav a.active {
-  background: var(--surface-3); color: var(--ink-1); font-weight: 650;
-  box-shadow: inset 2px 0 0 var(--accent);
-}
+.nav a:hover .icon { color: var(--ink-2); }
+.nav a.active { background: var(--surface-3); color: var(--ink-1); font-weight: 550; }
+.nav a.active .icon { color: var(--accent-mark); }
 
-.main { padding: 26px 28px 56px; max-width: 1500px; width: 100%; }
-.section { margin-top: 20px; }
+.main { padding: 20px 24px 48px; max-width: 1480px; width: 100%; }
+.section { margin-top: 14px; }
 
 /* ------------------------------ cards ----------------------------------- */
 .card {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  padding: 18px;
-  box-shadow: var(--shadow-1);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--r-md); padding: 14px;
 }
-.grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; }
-.twoCol { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 12px; }
-.row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 8px; }
+.twoCol { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 8px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .spread { justify-content: space-between; }
 
 /* --------------------------- stat tiles --------------------------------- */
-/* A number is the mark here, so it gets the weight a chart would get. */
-.metric { font-size: var(--fs-3xl); font-weight: 800; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; line-height: 1.1; }
-.metricBig { font-size: var(--fs-2xl); font-weight: 800; font-variant-numeric: tabular-nums; }
-.metricSmall { font-size: var(--fs-lg); font-weight: 700; }
+.metric { font-family: var(--font-mono); font-size: var(--fs-3xl); font-weight: 500; letter-spacing: -0.02em; line-height: 1.05; }
+.metricBig { font-family: var(--font-mono); font-size: var(--fs-2xl); font-weight: 500; letter-spacing: -0.01em; }
+.metricSmall { font-size: var(--fs-lg); font-weight: 600; }
 .muted { color: var(--ink-3); font-size: var(--fs-sm); }
-.eyebrow { color: var(--ink-3); font-size: var(--fs-xs); font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
-.planningMetrics .card { padding: 14px 16px; }
+.eyebrow { color: var(--ink-3); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.planningMetrics .card { padding: 11px 13px; }
+.planningMetrics .muted { font-size: var(--fs-xs); }
 
 /* ---------------------------- controls ---------------------------------- */
 .button {
-  background: var(--accent); color: var(--accent-ink); border: 0;
-  border-radius: var(--r-sm); padding: 9px 14px; font-weight: 650;
-  font-size: var(--fs-md); cursor: pointer; transition: background .13s ease;
+  background: var(--accent); color: var(--accent-ink); border: 1px solid transparent;
+  border-radius: var(--r-sm); padding: 6px 12px; font-weight: 550;
+  font-size: var(--fs-md); font-family: inherit; cursor: pointer;
+  transition: background .1s ease, border-color .1s ease;
 }
 .button:hover:not(:disabled) { background: var(--accent-hover); }
-.button:disabled { opacity: .5; cursor: not-allowed; }
-.button.secondary { background: var(--surface-3); color: var(--ink-1); border: 1px solid var(--border-strong); }
-.button.secondary:hover:not(:disabled) { background: var(--border); }
+.button:disabled { opacity: .4; cursor: not-allowed; }
+.button.secondary { background: transparent; color: var(--ink-2); border-color: var(--border-strong); }
+.button.secondary:hover:not(:disabled) { background: var(--surface-3); color: var(--ink-1); border-color: var(--border-strong); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
 .input {
   background: var(--surface-input); border: 1px solid var(--border-strong);
-  color: var(--ink-1); border-radius: var(--r-sm); padding: 9px 11px;
+  color: var(--ink-1); border-radius: var(--r-sm); padding: 6px 9px;
   font-size: var(--fs-md); font-family: inherit;
 }
-.input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.input.compact { padding: 5px 8px; font-size: var(--fs-sm); }
-.formGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
-.formGrid label { display: grid; gap: 5px; font-size: var(--fs-sm); color: var(--ink-3); }
+.input.compact { padding: 3px 6px; font-size: var(--fs-sm); }
+select.input { cursor: pointer; }
+.formGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.formGrid label { display: grid; gap: 4px; font-size: var(--fs-xs); color: var(--ink-3); text-transform: none; }
 .formGrid .span2 { grid-column: span 2; }
-.checkLabel { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--ink-2); }
+.checkLabel { display: flex; align-items: center; gap: 7px; font-size: var(--fs-sm); color: var(--ink-2); }
 button:not(.button) {
-  background: var(--surface-3); color: var(--ink-2); border: 1px solid var(--border);
-  border-radius: var(--r-sm); padding: 5px 9px; font-size: var(--fs-xs);
-  font-family: inherit; cursor: pointer;
+  background: transparent; color: var(--ink-3); border: 1px solid var(--border);
+  border-radius: var(--r-xs); padding: 3px 7px; font-size: var(--fs-xs);
+  font-family: inherit; cursor: pointer; transition: color .1s ease, border-color .1s ease;
 }
-button:not(.button):hover:not(:disabled) { background: var(--border); color: var(--ink-1); }
-button:not(.button):disabled { opacity: .45; cursor: not-allowed; }
+button:not(.button):hover:not(:disabled) { color: var(--ink-1); border-color: var(--border-strong); }
+button:not(.button):disabled { opacity: .4; cursor: not-allowed; }
 
 /* ----------------------------- tables ----------------------------------- */
+/* Reads like a data table: hairline rules, no zebra, uppercase micro headers. */
 .table { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
 .table th {
-  text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border);
-  color: var(--ink-3); font-size: var(--fs-xs); font-weight: 700;
+  text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border-strong);
+  color: var(--ink-3); font-size: 10px; font-weight: 600;
   letter-spacing: .07em; text-transform: uppercase; white-space: nowrap;
 }
-.table td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgba(40, 50, 80, .55); font-variant-numeric: tabular-nums; }
-.table tbody tr:hover { background: rgba(26, 35, 64, .5); }
+.table td { padding: 7px 10px; border-bottom: 1px solid var(--border); }
+.table tbody tr:hover { background: var(--surface-1); }
 .table tbody tr:last-child td { border-bottom: 0; }
-.activityTableWrap { overflow-x: auto; padding: 6px; }
+.activityTableWrap { overflow-x: auto; padding: 0; }
 
 /* ----------------------------- badges ----------------------------------- */
 .badge {
-  padding: 3px 9px; border-radius: var(--r-pill); background: var(--surface-3);
-  border: 1px solid var(--border); font-size: var(--fs-xs); font-weight: 600;
+  padding: 2px 7px; border-radius: var(--r-xs); background: var(--surface-3);
+  border: 1px solid var(--border); font-size: var(--fs-xs);
   color: var(--ink-2); white-space: nowrap;
 }
-.badge.success { background: rgba(25, 158, 112, .16); border-color: rgba(25, 158, 112, .45); color: #6bd6ad; }
-.sportLabel { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); }
+.badge.success { background: rgba(25, 158, 112, .13); border-color: rgba(25, 158, 112, .38); color: #63cfa6; }
+.sportLabel { font-size: 10px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); }
 .errorText { color: #ff9d9d; font-size: var(--fs-sm); }
 
 /* --------------------------- warnings ----------------------------------- */
-/* Status is never colour alone: each carries a label and a left rule. */
-.warningStack { display: grid; gap: 8px; }
+.warningStack { display: grid; gap: 6px; }
 .warning {
-  display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
-  padding: 10px 12px; border-radius: var(--r-md);
-  background: rgba(201, 133, 0, .1); border: 1px solid rgba(201, 133, 0, .35);
-  border-left: 3px solid var(--warning); font-size: var(--fs-sm); color: var(--ink-2);
+  display: flex; gap: 9px; align-items: baseline; flex-wrap: wrap;
+  padding: 8px 11px; border-radius: var(--r-sm);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-left: 2px solid var(--warning); font-size: var(--fs-sm); color: var(--ink-2);
 }
-.warning strong { color: var(--warning); font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: .07em; }
-.warning.high { background: rgba(230, 103, 103, .1); border-color: rgba(230, 103, 103, .38); border-left-color: var(--critical); }
+.warning strong { color: var(--warning); font-size: 10px; text-transform: uppercase; letter-spacing: .07em; }
+.warning.high { border-left-color: var(--critical); }
 .warning.high strong { color: var(--critical); }
 
 /* ----------------------------- charts ----------------------------------- */
-.chart { height: 340px; margin-top: 10px; }
+.chart { height: 310px; margin-top: 8px; }
 .recharts-cartesian-axis-tick text { fill: var(--ink-3); font-size: var(--fs-xs); }
 .recharts-cartesian-axis-line, .recharts-cartesian-axis-tick-line { stroke: var(--border); }
 .recharts-legend-item-text { color: var(--ink-2) !important; font-size: var(--fs-xs); }
-.recharts-label { fill: var(--ink-3); }
 
 .chartTooltip {
-  background: var(--surface-2); border: 1px solid var(--border-strong);
-  border-radius: var(--r-md); padding: 10px 12px;
-  box-shadow: var(--shadow-2); min-width: 168px;
+  background: var(--surface-3); border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm); padding: 8px 10px; box-shadow: var(--shadow-2); min-width: 158px;
 }
-.chartTooltipDate { color: var(--ink-1); font-weight: 700; font-size: var(--fs-sm); margin-bottom: 7px; }
-.chartTooltipRow { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); line-height: 1.75; }
-.chartTooltipChip { width: 10px; height: 10px; border-radius: 3px; flex: 0 0 auto; }
+.chartTooltipDate { color: var(--ink-1); font-weight: 600; font-size: var(--fs-sm); margin-bottom: 6px; }
+.chartTooltipRow { display: flex; align-items: center; gap: 7px; font-size: var(--fs-sm); line-height: 1.7; }
+.chartTooltipChip { width: 9px; height: 9px; border-radius: 2px; flex: 0 0 auto; }
 .chartTooltipName { color: var(--ink-3); }
-.chartTooltipValue { margin-left: auto; color: var(--ink-1); font-weight: 650; font-variant-numeric: tabular-nums; }
+.chartTooltipValue { margin-left: auto; color: var(--ink-1); font-family: var(--font-mono); font-size: var(--fs-xs); }
 
-.chartLegend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 2px; }
-.chartLegendItem { display: flex; align-items: center; gap: 7px; font-size: var(--fs-xs); color: var(--ink-2); }
-.chartLegendSwatch { width: 12px; height: 3px; border-radius: 2px; }
+.chartLegend { display: flex; gap: 12px; flex-wrap: wrap; }
+.chartLegendItem { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--ink-2); }
+.chartLegendSwatch { width: 11px; height: 2px; border-radius: 1px; }
 
 /* ---------------------------- calendar ---------------------------------- */
-.calendarHeader, .coachHeader { align-items: flex-end; margin-bottom: 4px; }
-.weekGrid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
-.dayColumn { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-md); padding: 9px; min-height: 190px; }
-.dayHeader { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--ink-2); margin-bottom: 8px; }
-.daySessions { display: grid; gap: 7px; }
-.emptyDay { border: 1px dashed var(--border-strong); border-radius: var(--r-sm); padding: 14px 8px; text-align: center; color: var(--ink-3); font-size: var(--fs-xs); }
+.calendarHeader, .coachHeader { align-items: flex-end; margin-bottom: 2px; }
+.weekGrid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.dayColumn { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 7px; min-height: 176px; }
+.dayHeader { display: flex; justify-content: space-between; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--ink-2); padding-bottom: 6px; margin-bottom: 6px; border-bottom: 1px solid var(--border); }
+.daySessions { display: grid; gap: 5px; }
+.emptyDay { border: 1px dashed var(--border); border-radius: var(--r-xs); padding: 12px 6px; text-align: center; color: var(--ink-3); font-size: 10px; }
 .workoutCard, .actualCard, .objectiveCard {
-  border-radius: var(--r-sm); padding: 9px; font-size: var(--fs-xs);
-  display: grid; gap: 5px; border: 1px solid var(--border);
+  border-radius: var(--r-xs); padding: 7px 8px; font-size: var(--fs-xs);
+  display: grid; gap: 4px; background: var(--surface-2); border: 1px solid var(--border);
 }
-.workoutCard { background: var(--surface-3); border-left: 3px solid var(--series-1); cursor: grab; }
+/* Sport identity is a 2px rule, not a filled block: it stays legible and does not
+   compete with the charts for colour. */
+.workoutCard { border-left: 2px solid var(--series-1); cursor: grab; }
+.workoutCard:active { cursor: grabbing; }
 .workoutCard.matched { border-left-color: var(--good); }
-.actualCard { background: rgba(25, 158, 112, .1); border-left: 3px solid var(--good); }
-.objectiveCard { background: rgba(213, 81, 129, .13); border-left: 3px solid var(--series-5); font-weight: 600; }
-.workoutMeta { display: flex; gap: 8px; flex-wrap: wrap; color: var(--ink-3); font-variant-numeric: tabular-nums; }
-.cardActions { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 2px; }
-.blockPill { padding: 2px 7px; border-radius: var(--r-pill); background: var(--surface-3); border: 1px solid var(--border); font-size: 10px; color: var(--ink-3); }
+.actualCard { border-left: 2px solid var(--good); }
+.objectiveCard { border-left: 2px solid var(--series-5); font-weight: 550; }
+.workoutMeta { display: flex; gap: 7px; flex-wrap: wrap; color: var(--ink-3); }
+.cardActions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 1px; }
+.blockPill { padding: 1px 6px; border-radius: var(--r-xs); background: var(--surface-3); font-size: 10px; color: var(--ink-3); }
 
 /* ----------------------------- season ----------------------------------- */
-.timeline { position: relative; height: 108px; margin-top: 14px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-md); }
-.timelineBlock { position: absolute; top: 12px; height: 44px; border-radius: var(--r-sm); padding: 6px 8px; overflow: hidden; background: var(--surface-3); border: 1px solid var(--border-strong); font-size: var(--fs-xs); display: grid; gap: 1px; align-content: center; }
-.timelineBlock b { font-size: var(--fs-xs); }
+.timeline { position: relative; height: 96px; margin-top: 10px; background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-sm); }
+.timelineBlock { position: absolute; top: 10px; height: 40px; border-radius: var(--r-xs); padding: 5px 7px; overflow: hidden; background: var(--surface-3); font-size: var(--fs-xs); display: grid; gap: 1px; align-content: center; }
 .timelineBlock small { color: var(--ink-3); font-size: 10px; }
-.timelineBlock.base    { border-left: 3px solid var(--series-1); }
-.timelineBlock.build   { border-left: 3px solid var(--series-2); }
-.timelineBlock.peak    { border-left: 3px solid var(--series-4); }
-.timelineBlock.taper   { border-left: 3px solid var(--series-3); }
-.timelineBlock.recovery{ border-left: 3px solid var(--series-reference); }
-.timelineObjective { position: absolute; bottom: 8px; transform: translateX(-50%); text-align: center; font-size: 10px; color: var(--ink-2); display: grid; gap: 2px; justify-items: center; max-width: 110px; }
-.timelineObjective span { width: 18px; height: 18px; border-radius: var(--r-pill); background: var(--series-5); color: #fff; font-weight: 800; display: grid; place-items: center; }
-.listRow { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(40, 50, 80, .55); font-size: var(--fs-sm); }
+.timelineBlock.base     { border-left: 2px solid var(--series-1); }
+.timelineBlock.build    { border-left: 2px solid var(--series-2); }
+.timelineBlock.peak     { border-left: 2px solid var(--series-4); }
+.timelineBlock.taper    { border-left: 2px solid var(--series-3); }
+.timelineBlock.recovery { border-left: 2px solid var(--series-reference); }
+.timelineObjective { position: absolute; bottom: 6px; transform: translateX(-50%); text-align: center; font-size: 10px; color: var(--ink-2); display: grid; gap: 2px; justify-items: center; max-width: 104px; }
+.timelineObjective span { width: 16px; height: 16px; border-radius: var(--r-xs); background: var(--surface-4); color: var(--ink-1); font-weight: 600; display: grid; place-items: center; }
+.listRow { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); }
 .listRow:last-child { border-bottom: 0; }
 
 /* ------------------------------ coach ----------------------------------- */
 .coachChat { display: grid; grid-template-rows: auto 1fr auto; }
-.messageStack { display: grid; gap: 10px; margin: 12px 0; max-height: 420px; overflow-y: auto; }
-.coachMessage { padding: 11px 13px; border-radius: var(--r-md); background: var(--surface-1); border: 1px solid var(--border); font-size: var(--fs-sm); line-height: 1.6; }
+.messageStack { display: grid; gap: 8px; margin: 10px 0; max-height: 400px; overflow-y: auto; }
+.coachMessage { padding: 9px 11px; border-radius: var(--r-sm); background: var(--surface-1); border: 1px solid var(--border); font-size: var(--fs-sm); line-height: 1.55; }
 .coachMessage.user { background: var(--surface-3); }
-.messageRole { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 5px; }
-.emptyCoach { padding: 22px; text-align: center; color: var(--ink-3); font-size: var(--fs-sm); border: 1px dashed var(--border-strong); border-radius: var(--r-md); }
-.coachAsk { display: grid; gap: 9px; }
+.messageRole { font-size: 10px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 4px; }
+.emptyCoach { padding: 20px; text-align: center; color: var(--ink-3); font-size: var(--fs-sm); border: 1px dashed var(--border); border-radius: var(--r-sm); }
+.coachAsk { display: grid; gap: 8px; }
 .coachAsk textarea { resize: vertical; line-height: 1.5; }
-.coachContext { display: grid; gap: 2px; }
-.evidenceRow { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-.proposalGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 12px; margin-top: 12px; }
-.proposalCard.applied { border-color: rgba(25, 158, 112, .45); }
-.proposalCard.rejected { opacity: .62; }
-.commandStack { display: grid; gap: 6px; margin-top: 10px; }
-.commandRow { display: flex; gap: 10px; align-items: baseline; padding: 8px 10px; border-radius: var(--r-sm); background: var(--surface-1); font-size: var(--fs-sm); }
-.commandRow strong { color: var(--ink-3); font-size: var(--fs-xs); min-width: 14px; }
-.whyPanel { border-top: 1px solid var(--border); padding-top: 12px; }
-.whyPanel ul { margin: 8px 0 0; padding-left: 18px; font-size: var(--fs-sm); line-height: 1.65; color: var(--ink-2); }
+.coachContext { display: grid; gap: 1px; }
+.evidenceRow { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 7px; }
+.proposalGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 8px; margin-top: 10px; }
+.proposalCard.applied { border-left: 2px solid var(--good); }
+.proposalCard.rejected { opacity: .58; }
+.commandStack { display: grid; gap: 5px; margin-top: 8px; }
+.commandRow { display: flex; gap: 9px; align-items: baseline; padding: 7px 9px; border-radius: var(--r-xs); background: var(--surface-1); font-size: var(--fs-sm); }
+.commandRow strong { color: var(--ink-3); font-family: var(--font-mono); font-size: var(--fs-xs); min-width: 12px; }
+.whyPanel { border-top: 1px solid var(--border); padding-top: 10px; }
+.whyPanel ul { margin: 6px 0 0; padding-left: 16px; font-size: var(--fs-sm); line-height: 1.6; color: var(--ink-2); }
 
 /* ----------------------------- imports ---------------------------------- */
-.importProgress { margin-top: 12px; display: grid; gap: 7px; }
-.progressTrack { height: 7px; border-radius: var(--r-pill); background: var(--surface-input); overflow: hidden; }
-.progressFill { height: 100%; background: var(--accent); border-radius: var(--r-pill); transition: width .35s ease; }
-.connectionStats { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; font-size: var(--fs-sm); color: var(--ink-3); font-variant-numeric: tabular-nums; }
-.classificationCell { display: grid; gap: 3px; }
+.importProgress { margin-top: 10px; display: grid; gap: 6px; }
+.progressTrack { height: 4px; border-radius: var(--r-pill); background: var(--surface-input); overflow: hidden; }
+.progressFill { height: 100%; background: var(--accent-mark); transition: width .3s ease; }
+.connectionStats { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; font-size: var(--fs-sm); color: var(--ink-3); }
+.classificationCell { display: grid; gap: 2px; }
 
 /* --------------------------- responsive --------------------------------- */
-@media (max-width: 1100px) {
-  .weekGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
+@media (max-width: 1100px) { .weekGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 900px) {
   .shell { grid-template-columns: 1fr; }
   .sidebar { display: none; }
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .main { padding: 18px 14px 40px; }
+  .main { padding: 16px 12px 36px; }
   .weekGrid { grid-template-columns: 1fr; }
 }

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- Aeroform mark: a ridgeline that is also a load curve. Reads at 16px because it
+       is three strokes and one solid peak, with no text and no gradient. -->
+  <rect width="32" height="32" rx="7" fill="#11141a"/>
+  <path d="M4 23.5 L11 14.5 L15.5 19 L21.5 8 L28 23.5 Z" fill="#e2e8f5"/>
+  <path d="M4 23.5 L11 14.5 L15.5 19 L21.5 8 L28 23.5" fill="none" stroke="#11141a" stroke-width="1.4" stroke-linejoin="round"/>
+  <path d="M21.5 8 L28 23.5 L15.5 23.5 Z" fill="#4f8ef7"/>
+</svg>

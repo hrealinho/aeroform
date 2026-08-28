@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.6.1 - Visual identity and interface pass
+
+- **App icon.** `app/icon.svg`: a ridgeline that doubles as a load curve. Three strokes and
+  one solid peak, so it survives 16px with no text and no gradient. The sidebar uses the same
+  mark via `Logo`.
+- **Real icons.** Hand-written 16px SVG paths replace the emoji in the calendar. Emoji render
+  differently on every platform, cannot inherit colour, and were the main thing making the UI
+  look improvised.
+- **Chrome is monochrome; colour belongs to data.** The primary action is now near-white on
+  dark rather than a saturated indigo, and the only coloured piece of chrome is the logo mark.
+  A saturated accent button competing with the charts was both a template tell and a
+  legibility problem in a dense data tool.
+- **Tighter geometry.** Radii 3-9px instead of 8-16px, hairline borders, shadows removed from
+  cards, denser type scale and spacing. Sport identity in the calendar is a 2px left rule
+  rather than a filled block.
+- **Numbers get a monospace face** with tabular figures, so values stop reflowing between
+  updates and columns line up.
+- **Neutral surfaces.** The indigo/purple cast is gone in favour of neutral graphite. Series
+  hues were re-run through the colourblind and contrast validator against the new surface and
+  still pass: fitness/fatigue/form on all pairs, the load stack on adjacent pairs.
+- Flat background: the radial gradient was decoration competing with the charts.
+- Dashboard restructured around stat tiles with context, plus a week summary strip.
+- Date ranges use a plain hyphen rather than an arrow.
+
+
 ## v0.6.0 - Power profile, race predictions, and a real design system
 
 ### Added

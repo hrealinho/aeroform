@@ -16,10 +16,10 @@ const FALLBACK: Record<string, string> = {
   "--series-fitness": "#3987e5",
   "--series-fatigue": "#d55181",
   "--series-form": "#c98500",
-  "--series-reference": "#7d89b0",
-  "--grid": "rgba(152,164,199,0.14)",
-  "--ink-3": "#98a4c7",
-  "--surface-2": "#141b31",
+  "--series-reference": "#6f7889",
+  "--grid": "rgba(168,177,193,0.11)",
+  "--ink-3": "#757e8e",
+  "--surface-2": "#161a21",
 };
 
 function token(name: string): string {
