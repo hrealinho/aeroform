@@ -1,9 +1,11 @@
 from __future__ import annotations
+from datetime import timedelta
+
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.core.config import settings
-from app.core.timeutil import utcnow
+from app.core.timeutil import ensure_aware, utcnow
 from app.domain.models import Activity, ActivitySource, ImportSession, IntegrationConnection
 from app.integrations.strava.client import api_get
 from app.integrations.strava.mapper import map_activity
@@ -58,6 +60,37 @@ def _write_state(session: ImportSession, next_page: int, errors: list[dict], cou
     summary["sync"] = {"next_page": next_page, "counted_pages": counted_pages, "completed": completed}
     session.error_summary = summary
 
+
+
+# A sync that dies mid-run leaves its session in `processing` forever, and the
+# already-running guard then refuses to start a new one. Anything untouched for this long
+# is treated as abandoned rather than blocking the athlete indefinitely.
+STALE_IMPORT_AFTER_HOURS = 6
+
+
+def reap_stale_sessions(db: Session, athlete_id: int, source: str = "strava") -> int:
+    """Mark abandoned in-flight import sessions as failed. Returns how many were reaped."""
+    cutoff = utcnow() - timedelta(hours=STALE_IMPORT_AFTER_HOURS)
+    stale = list(db.scalars(select(ImportSession).where(
+        ImportSession.athlete_id == athlete_id,
+        ImportSession.source == source,
+        ImportSession.status.in_(["queued", "processing"]),
+    )))
+    reaped = 0
+    for session in stale:
+        updated = session.updated_at or session.created_at
+        if updated is not None and ensure_aware(updated) > cutoff:
+            continue
+        session.status = "failed"
+        state = session.error_summary if isinstance(session.error_summary, dict) else {}
+        errors = list(state.get("errors") or [])
+        errors.append({"error": f"Import abandoned: no progress for over {STALE_IMPORT_AFTER_HOURS}h."})
+        state["errors"] = errors[:100]
+        session.error_summary = state
+        reaped += 1
+    if reaped:
+        db.commit()
+    return reaped
 
 def sync_activity(db: Session, athlete_id: int, strava_activity_id: int, import_session_id: int | None = None) -> tuple[int, bool]:
     connection = _connection(db, athlete_id)
@@ -170,12 +203,19 @@ def historical_sync(db: Session, athlete_id: int, import_session_id: int, max_pa
                             db, athlete_id, parsed, source_type="strava",
                             external_id=str(summary["id"]), import_session_id=import_session_id,
                         )
+                        # A successful retry is a success whether or not it deduplicated.
+                        # Without this branch a retry that imported a new activity fell
+                        # through to failed_count, which is why a completed backfill could
+                        # report every one of its activities as failed while the rows were
+                        # sitting in the database.
+                        session = db.get(ImportSession, import_session_id)
                         if duplicate:
-                            session = db.get(ImportSession, import_session_id)
                             session.duplicate_count += 1
-                            processed += 1
-                            db.commit()
-                            continue
+                        else:
+                            session.imported_count += 1
+                        processed += 1
+                        db.commit()
+                        continue
                     except Exception as retry_exc:
                         db.rollback()
                         session = db.get(ImportSession, import_session_id)

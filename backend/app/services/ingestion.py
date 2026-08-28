@@ -18,7 +18,7 @@ from app.importers.gpx import parse_gpx
 from app.importers.tcx import parse_tcx
 from app.importers.zip_import import extract_member, safe_members
 from app.importers.formats import activity_format, safe_basename
-from app.metrics.load import power_load, hr_trimp_load, rpe_load, terrain_load_profile, composite_training_load, LoadResult
+from app.metrics.load import power_load, hr_trimp_load, rpe_load, terrain_load_profile, composite_training_load, resolve_durations, LoadResult
 from app.metrics.streams import normalized_power, power_zone_seconds, hr_zone_seconds, aerobic_decoupling
 from app.metrics.terrain import terrain_stream_metrics
 from app.services.classification import apply_classification
@@ -94,27 +94,31 @@ def calculate_load(db: Session, athlete_id: int, parsed: ParsedActivity):
     threshold_power = threshold(db, athlete_id, parsed.sport, "ftp" if parsed.sport == "cycling" else "critical_power", day)
     resting_hr = threshold(db, athlete_id, parsed.sport, "resting_hr", day) or threshold(db, athlete_id, "global", "resting_hr", day)
     max_hr = threshold(db, athlete_id, parsed.sport, "max_hr", day) or threshold(db, athlete_id, "global", "max_hr", day)
+    # Power/HR averages describe the moving window, so metabolic load is calculated
+    # against moving time. Time-on-feet keeps elapsed time, clamped for plausibility.
+    durations = resolve_durations(parsed.duration_s, parsed.moving_time_s)
     try:
         if parsed.normalized_power and threshold_power:
-            metabolic = power_load(parsed.duration_s, parsed.normalized_power, threshold_power)
+            metabolic = power_load(durations.metabolic_s, parsed.normalized_power, threshold_power)
         elif parsed.avg_power and threshold_power:
-            metabolic = power_load(parsed.duration_s, parsed.avg_power, threshold_power)
+            metabolic = power_load(durations.metabolic_s, parsed.avg_power, threshold_power)
         elif parsed.avg_hr and resting_hr and max_hr:
-            metabolic = hr_trimp_load(parsed.duration_s, parsed.avg_hr, resting_hr, max_hr)
+            metabolic = hr_trimp_load(durations.metabolic_s, parsed.avg_hr, resting_hr, max_hr)
         else:
             # Neutral duration fallback until athlete adds RPE/thresholds.
-            metabolic = rpe_load(parsed.duration_s, parsed.rpe or 3.0)
+            metabolic = rpe_load(durations.metabolic_s, parsed.rpe or 3.0)
     except ValueError:
-        metabolic = rpe_load(max(parsed.duration_s, 60), parsed.rpe or 3.0)
+        metabolic = rpe_load(max(durations.metabolic_s, 60), parsed.rpe or 3.0)
 
     terrain = terrain_load_profile(
-        parsed.sport, parsed.duration_s, parsed.distance_m, parsed.elevation_gain_m, parsed.elevation_loss_m
+        parsed.sport, durations.durability_s, parsed.distance_m, parsed.elevation_gain_m, parsed.elevation_loss_m
     )
     overall, blend = composite_training_load(parsed.sport, metabolic.load, terrain)
     details = {
         **metabolic.details,
         "metabolic_load": metabolic.load,
         "metabolic_method": metabolic.method,
+        "durations": durations.as_dict(),
         "terrain": terrain.as_dict() if terrain else None,
         "composite": blend,
     }

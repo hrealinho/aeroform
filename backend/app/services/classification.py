@@ -21,6 +21,14 @@ _CYCLE_HINTS = {"cycling", "biking", "ride", "road", "mountain_biking", "gravel"
 _RUN_HINTS = {"running", "run", "road_running", "street", "track", "treadmill"}
 _MOUNTAIN_HINTS = {"mountaineering", "alpine", "backcountry", "ski_mountaineering"}
 
+# Strava reports most trail runs as plain "Run", so an explicit road-running label is not
+# conclusive. Measured on a real 2,767-activity history: road runs sat at p95 = 21 m/km
+# while activities Strava did label TrailRun started at p10 = 31 m/km. A 30 m/km gate
+# separates them cleanly and reclassified only 9 of 423 runs, so it is deliberately
+# conservative and always marked medium confidence so the athlete can override it.
+TRAIL_GAIN_PER_KM = 30.0
+TRAIL_MIN_DISTANCE_KM = 3.0
+
 
 def _hint(value: str | None) -> str:
     return (value or "").strip().lower().replace(" ", "_").replace("-", "_")
@@ -45,6 +53,18 @@ def _explicit_from_hint(raw: str | None) -> str | None:
     return None
 
 
+def _terrain_density(parsed: ParsedActivity) -> tuple[float, float]:
+    """Return (distance_km, gain per km)."""
+    km = max(float(parsed.distance_m or 0), 0.0) / 1000.0
+    gain = max(float(parsed.elevation_gain_m or 0), 0.0)
+    return km, (gain / km if km > 0 else 0.0)
+
+
+def _looks_like_trail(parsed: ParsedActivity) -> tuple[bool, float]:
+    km, gain_per_km = _terrain_density(parsed)
+    return (km >= TRAIL_MIN_DISTANCE_KM and gain_per_km >= TRAIL_GAIN_PER_KM), gain_per_km
+
+
 def classify_parsed(parsed: ParsedActivity) -> Classification:
     """Normalize source sport metadata and conservatively classify ambiguous files.
 
@@ -61,12 +81,28 @@ def classify_parsed(parsed: ParsedActivity) -> Classification:
         explicit = _explicit_from_hint(raw)
         if explicit:
             subtype = parsed.subtype or (str(raw) if raw else None)
+            if explicit == "running":
+                # Only road running is refined. A source that actually said "trail" is
+                # already trail_running and is never second-guessed here.
+                trail, gain_per_km = _looks_like_trail(parsed)
+                if trail:
+                    return Classification(
+                        "trail_running", subtype, "medium",
+                        f"source declared {raw} but profile is {gain_per_km:.0f} m gain/km",
+                    )
             return Classification(explicit, subtype, "high", f"source declared {raw}")
 
     # Keep already canonical, non-generic parser mappings unless the source marked
     # them as ambiguous. This prevents a hilly road run being relabelled as trail.
     ambiguous = bool(metadata.get("classification_ambiguous"))
     if parsed.sport in _CANONICAL - {"other"} and not ambiguous:
+        if parsed.sport == "running":
+            trail, gain_per_km = _looks_like_trail(parsed)
+            if trail:
+                return Classification(
+                    "trail_running", parsed.subtype, "medium",
+                    f"canonical source sport running, but profile is {gain_per_km:.0f} m gain/km",
+                )
         return Classification(parsed.sport, parsed.subtype, "high", "canonical source sport")
 
     # Speed must be based on moving time. GPX never declares it, so it is derived from
@@ -88,7 +124,7 @@ def classify_parsed(parsed: ParsedActivity) -> Classification:
         return Classification("cycling", parsed.subtype, "medium", f"ambiguous file, average speed {speed_m_s:.1f} m/s ({basis})")
     if speed_m_s and speed_m_s <= 2.15:
         return Classification("hiking", parsed.subtype, "medium", f"ambiguous file, average speed {speed_m_s:.1f} m/s ({basis})")
-    if km >= 3 and gain_per_km >= 30:
+    if km >= TRAIL_MIN_DISTANCE_KM and gain_per_km >= TRAIL_GAIN_PER_KM:
         return Classification("trail_running", parsed.subtype, "medium", f"ambiguous run-like file, {gain_per_km:.0f} m gain/km")
     if distance > 0:
         return Classification("running", parsed.subtype, "low", "ambiguous file with run-like speed/profile")

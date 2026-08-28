@@ -1,5 +1,64 @@
 # Changelog
 
+## v0.5.3 - Load correctness, validated against a real history
+
+Found by replaying a real 2,767-activity history (2012-2026) through the metrics rather
+than by reading code. Measured effect of this release on that history:
+
+```text
+total training load   238,400  ->  171,567   (-28%)
+single worst activity   8,920  ->      806
+activities with descent load        0  ->  1,100
+```
+
+### Fixed
+
+- **Metabolic load used elapsed time instead of moving time.** Strava computes
+  `weighted_average_watts` and `average_heartrate` over moving time, so multiplying either
+  by elapsed time inflated load by the whole stopped fraction. On the reference history 45%
+  of activities had elapsed > 1.25x moving and 7% exceeded 5x. One ride left recording for
+  three days scored 8,920 load - a quarter of a normal training year in a single day, which
+  corrupted fitness, fatigue and form for months around it and poisoned the 7- and 28-day
+  totals the AI coach reasons over. `resolve_durations` now splits the two: metabolic load
+  uses moving time, time-on-feet keeps elapsed but is clamped at 3x moving so a forgotten
+  stop cannot masquerade as a 72-hour effort.
+- **Descent load was inert on every summary-imported activity.** Strava's summary payload
+  has `total_elevation_gain` and no loss field, and loss was only derivable from streams.
+  With `STRAVA_SYNC_STREAMS` off by default that left `elevation_loss_m` null everywhere, so
+  `descent_load` was 0 across an entire history and v0.5's headline descent weighting
+  contributed nothing at all. Loss is now estimated from gain using the summary's own
+  start/end coordinates to detect a closed loop, always labelled with its basis
+  (`estimated_closed_loop` / `estimated_open_route` / `stream`) and confidence.
+- **A completed backfill reported every activity as failed.** In `historical_sync`, a
+  successful `IntegrityError` retry that imported a new activity fell through to
+  `failed_count` because only the duplicate branch continued. Sessions showed
+  `imported=0 failed=2770` with 2,767 activities sitting in the table.
+- **An interrupted sync blocked all later ones.** A session left in `processing` was still
+  considered active forever, so the already-running guard refused every new sync.
+  `reap_stale_sessions` retires sessions with no progress for six hours.
+- **Threshold estimation selected efforts by elapsed time,** letting a short ride with a
+  long cafe stop qualify as a sustained effort. Candidate selection now uses working time.
+- **Trail runs were being scored with road weights.** Strava reports most trail runs as
+  plain `Run`. On the reference history road runs sat at p95 = 21 m/km while activities
+  Strava did label `TrailRun` began at p10 = 31 m/km, so an explicit running label is now
+  refined to `trail_running` above 30 m/km over at least 3 km, at medium confidence so it
+  stays overridable.
+
+### Added
+
+- `GET /api/v1/activities/duplicates` surfaces probable repeat recordings of one session.
+  The fingerprint buckets distance to 20 m, tighter than GPS variance on a re-recorded
+  route, so 34 pairs differing by 1-4% were both stored and counted twice. They are never
+  merged automatically - each has its own provider id, so which copy to keep is the
+  athlete's decision - and `DELETE /api/v1/activities/{id}` resolves them.
+- Threshold responses now include `advice`: what is missing, what it costs, and whether it
+  can be estimated at all. Resting HR can only be inferred from an HR stream, so a
+  summary-only history cannot produce it automatically, and 37% of activities were silently
+  falling back to a duration-based guess without saying why.
+- `details.durations` on every activity records the metabolic and durability basis used,
+  and whether stopped time was clamped.
+
+
 ## v0.5.2 - Correctness pass on load, thresholds and the calendar
 
 ### Fixed - blocking

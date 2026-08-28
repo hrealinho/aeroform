@@ -22,4 +22,9 @@ def test_strava_perceived_exertion_is_mapped_to_rpe():
         "perceived_exertion": 6,
     })
     assert parsed.rpe == 6.0
-    assert parsed.elevation_loss_m is None
+    # Elevation loss is now estimated rather than left null. Strava's summary payload has
+    # no loss field, and leaving it null meant descent load was zero on every
+    # summary-imported activity. The estimate is always labelled with its basis.
+    assert parsed.elevation_loss_m == 100.0
+    assert parsed.source_metadata["elevation_loss_source"] == "estimated_assumed_return"
+    assert parsed.source_metadata["elevation_loss_confidence"] == "low"

@@ -1,5 +1,5 @@
 """The command validator must cover every workout a proposal references."""
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.ai.commands import validate_commands
 from app.domain.models import PlannedWorkout

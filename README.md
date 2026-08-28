@@ -2,6 +2,24 @@
 
 Training-first endurance analytics, season planning and grounded AI coaching. The product deliberately keeps social mechanics out of the core experience: activities become private training data used for analytics, projections and adaptive planning.
 
+## v0.5.3 load correctness
+
+Validated by replaying a real 2,767-activity history through the metrics. Load was
+overstated by 28% because metabolic load multiplied moving-time power averages by elapsed
+time, and descent load was zero on every Strava-imported activity because the summary
+payload carries no elevation loss. Both are fixed; see `CHANGELOG.md`.
+
+Two consequences worth knowing:
+
+- **Load numbers will drop after upgrading.** They were too high. Run
+  `POST /api/v1/thresholds/recompute` (or `python scripts/recompute_metrics.py --force`)
+  to bring stored history onto the corrected model, then re-estimate thresholds, since the
+  old estimates were derived from inflated durations.
+- **Descent is estimated, not measured,** for activities imported from Strava summaries.
+  Every value carries `elevation_loss_source` and a confidence. Set
+  `STRAVA_SYNC_STREAMS=true` before a backfill if you want measured descent, at the cost of
+  one extra API call per activity.
+
 ## v0.5.2 correctness fixes
 
 Shipped alongside the threshold/zone work described below. The headline fixes:
@@ -281,6 +299,9 @@ GET  /api/v1/analytics/projection
 POST /api/v1/matching/auto
 POST /api/v1/planned-workouts
 PATCH /api/v1/planned-workouts/{id}
+
+GET  /api/v1/activities/duplicates
+DELETE /api/v1/activities/{id}
 
 GET  /api/v1/thresholds
 POST /api/v1/thresholds/estimate

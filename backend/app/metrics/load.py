@@ -47,6 +47,63 @@ class TerrainLoadProfile:
         }
 
 
+# Elapsed time is not interchangeable with working time. Strava computes
+# `weighted_average_watts` and `average_heartrate` over MOVING time, so multiplying
+# either by elapsed time inflates load by the whole stopped fraction: coffee stops,
+# traffic lights, summit breaks, and worst of all a computer left running for days.
+# Measured against a real 2,767-activity history, 45% of activities had elapsed > 1.25x
+# moving and total load was overstated by roughly a third.
+#
+# Time on feet is different: for hiking and mountaineering the stationary time is part
+# of the stress, so durability keeps elapsed time. It is only clamped when the ratio
+# stops being physically plausible, which is what catches a forgotten stop.
+MAX_PLAUSIBLE_STOPPED_RATIO = 3.0
+
+
+@dataclass(frozen=True)
+class ActivityDurations:
+    """The two different durations a load model needs."""
+
+    metabolic_s: float
+    durability_s: float
+    elapsed_s: float
+    moving_s: float | None
+    basis: str
+    clamped: bool
+
+    def as_dict(self) -> dict:
+        return {
+            "metabolic_s": round(self.metabolic_s, 1),
+            "durability_s": round(self.durability_s, 1),
+            "elapsed_s": round(self.elapsed_s, 1),
+            "moving_s": round(self.moving_s, 1) if self.moving_s is not None else None,
+            "basis": self.basis,
+            "stopped_time_clamped": self.clamped,
+        }
+
+
+def resolve_durations(elapsed_s: float | None, moving_time_s: float | None = None) -> ActivityDurations:
+    """Split a activity's duration into a metabolic and a time-on-feet basis.
+
+    ``metabolic_s`` is moving time when the source provides it, because that is the
+    window the source's average/normalized power and average heart rate describe.
+    ``durability_s`` stays elapsed so long breaks still count toward time on feet, but is
+    clamped to ``MAX_PLAUSIBLE_STOPPED_RATIO`` times moving time to survive a recording
+    that was never stopped.
+    """
+    elapsed = max(float(elapsed_s or 0), 0.0)
+    moving = float(moving_time_s) if moving_time_s is not None and moving_time_s > 0 else None
+
+    if moving is None:
+        return ActivityDurations(elapsed, elapsed, elapsed, None, "elapsed_only", False)
+
+    moving = min(moving, elapsed) if elapsed > 0 else moving
+    ceiling = moving * MAX_PLAUSIBLE_STOPPED_RATIO
+    clamped = elapsed > ceiling
+    durability = ceiling if clamped else elapsed
+    return ActivityDurations(moving, durability, elapsed, moving, "moving_time", clamped)
+
+
 def power_load(duration_s: float, normalized_power: float, threshold_power: float) -> LoadResult:
     if duration_s <= 0 or normalized_power <= 0 or threshold_power <= 0:
         raise ValueError("Power load requires positive duration, power and threshold")

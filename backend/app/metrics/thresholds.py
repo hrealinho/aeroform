@@ -4,11 +4,12 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from math import isfinite
 from statistics import median
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.timeutil import utcnow
-from app.domain.models import Activity, AthleteThreshold
+from app.domain.models import Activity, ActivityStreams, AthleteThreshold
+from app.metrics.load import resolve_durations
 from app.metrics.terrain import sample_durations
 
 
@@ -102,11 +103,21 @@ def _max_effort(activities: list[Activity], key: str, seconds: int) -> tuple[flo
     return best, best_id
 
 
+def _working_seconds(activity: Activity) -> float:
+    """Seconds the athlete was actually working.
+
+    Activity averages describe moving time, so selecting candidate efforts by elapsed time
+    let a short ride with a three-hour cafe stop qualify as a sustained effort.
+    """
+    return resolve_durations(activity.duration_s, activity.moving_time_s).metabolic_s
+
+
 def _best_activity_average(activities: list[Activity], key: str, min_duration_s: int, max_duration_s: int | None = None) -> tuple[float | None, int | None]:
     best, best_id = None, None
     attr = {"power": "avg_power", "hr": "avg_hr"}.get(key)
     for a in activities:
-        if a.duration_s < min_duration_s or (max_duration_s and a.duration_s > max_duration_s):
+        working = _working_seconds(a)
+        if working < min_duration_s or (max_duration_s and working > max_duration_s):
             continue
         value = _finite(getattr(a, attr, None)) if attr else None
         if value is not None and (best is None or value > best):
@@ -248,9 +259,10 @@ def _estimate_threshold_speed(activities: list[Activity], observed_max_hr: float
     if not candidates:
         best, best_id = None, None
         for a in activities:
-            if not a.distance_m or a.duration_s < 1800 or a.duration_s > 7200:
+            working = _working_seconds(a)
+            if not a.distance_m or working < 1800 or working > 7200:
                 continue
-            speed = a.distance_m / a.duration_s
+            speed = a.distance_m / working
             if best is None or speed > best:
                 best, best_id = speed, a.id
         if best is None:
@@ -337,6 +349,64 @@ def first_activity_date(db: Session, athlete_id: int) -> date | None:
     earliest = db.scalar(select(Activity.start_time).where(Activity.athlete_id == athlete_id).order_by(Activity.start_time).limit(1))
     return earliest.date() if earliest else None
 
+
+
+# hr_trimp_load needs resting AND max HR. Resting HR can only be inferred from an HR
+# stream, and a summary-only Strava backfill has none, so on that kind of history it can
+# never be produced automatically. Rather than leave the athlete guessing why every
+# activity says "session_rpe", the API states what is missing and what it would unlock.
+def missing_threshold_advice(db: Session, athlete_id: int) -> list[dict]:
+    rows = {(r.sport, r.metric) for r in _current_rows(db, athlete_id)}
+    metrics = {metric for _, metric in rows}
+    advice: list[dict] = []
+
+    hr_activities = db.scalar(select(func.count(Activity.id)).where(
+        Activity.athlete_id == athlete_id, Activity.avg_hr.isnot(None),
+    )) or 0
+    power_activities = db.scalar(select(func.count(Activity.id)).where(
+        Activity.athlete_id == athlete_id, Activity.avg_power.isnot(None),
+    )) or 0
+    streams = db.scalar(select(func.count(ActivityStreams.id)).join(
+        Activity, Activity.id == ActivityStreams.activity_id,
+    ).where(Activity.athlete_id == athlete_id)) or 0
+
+    if hr_activities and "resting_hr" not in metrics:
+        advice.append({
+            "metric": "resting_hr",
+            "severity": "high",
+            "message": (
+                f"{hr_activities} activities have average heart rate but no resting HR is set, so "
+                "heart-rate load cannot be calculated and those activities fall back to a "
+                "duration-based estimate."
+            ),
+            "action": "Enter your resting HR manually (sport: global, metric: resting_hr).",
+            "auto_estimable": streams > 0,
+        })
+    if hr_activities and "max_hr" not in metrics:
+        advice.append({
+            "metric": "max_hr", "severity": "high",
+            "message": "No max HR is set, which heart-rate load also requires.",
+            "action": "Estimate from history, or enter a tested value.",
+            "auto_estimable": True,
+        })
+    if power_activities and not ({"ftp", "critical_power"} & metrics):
+        advice.append({
+            "metric": "ftp", "severity": "medium",
+            "message": f"{power_activities} activities have power but no threshold power is set.",
+            "action": "Estimate from history, or enter a tested FTP.",
+            "auto_estimable": True,
+        })
+    if streams == 0:
+        advice.append({
+            "metric": "streams", "severity": "info",
+            "message": (
+                "No activity streams are stored, so best-effort windows, power/HR zone time and "
+                "decoupling cannot be calculated. Threshold estimates fall back to activity averages."
+            ),
+            "action": "Set STRAVA_SYNC_STREAMS=true before a backfill, or import original FIT/GPX files.",
+            "auto_estimable": False,
+        })
+    return advice
 
 def _current_rows(db: Session, athlete_id: int, at: date | None = None) -> list[AthleteThreshold]:
     at = at or date.today()
@@ -447,7 +517,7 @@ def current_thresholds_and_zones(db: Session, athlete_id: int) -> dict:
             seconds = 1000.0 / row.value
             item["display_value"] = f"{int(seconds // 60)}:{int(round(seconds % 60)):02d}/km"
         out.append(item)
-    return {"thresholds": out}
+    return {"thresholds": out, "advice": missing_threshold_advice(db, athlete_id)}
 
 
 def upsert_manual_threshold(db: Session, athlete_id: int, sport: str, metric: str, value: float, valid_from: date) -> AthleteThreshold:

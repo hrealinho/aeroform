@@ -20,6 +20,7 @@ from app.planning.workouts import estimate_planned_load, infer_intensity
 from app.planning.projection import project_load_series, projection_warnings, weekly_totals
 from app.planning.matching import activity_match_score
 from app.integrations.strava.client import authorization_url, exchange_code, revoke, StravaError
+from app.integrations.strava.sync import reap_stale_sessions
 from app.services.oauth_state import create_state, verify_state
 from app.services.token_crypto import encrypt_token
 from app.tasks.imports import process_uploaded_files, sync_strava_history, sync_strava_activity, remove_strava_activity, recompute_athlete_metrics
@@ -33,6 +34,7 @@ from app.ai.explain import explain_workout
 from app.services.ingestion import recalculate_activity_metrics
 from app.metrics.thresholds import estimate_thresholds, persist_estimates, current_thresholds_and_zones, first_activity_date, upsert_manual_threshold, delete_threshold
 from app.services.dedup import activity_fingerprint
+from app.services.duplicates import find_duplicate_groups, delete_activity
 
 router = APIRouter(prefix="/api/v1")
 
@@ -135,6 +137,29 @@ def activities(db: Session = Depends(get_db), limit: int = Query(100, ge=1, le=1
     stmt = stmt.order_by(Activity.start_time.desc()).limit(limit)
     return [_activity_payload(a, m) for a, m in db.execute(stmt).all()]
 
+
+
+@router.get("/activities/duplicates")
+def activity_duplicates(limit: int = Query(200, ge=1, le=1000), db: Session = Depends(get_db)):
+    """Probable repeat recordings of the same session, for the athlete to resolve.
+
+    Never merged automatically: each copy has its own provider id, so choosing which to
+    keep is the athlete's decision.
+    """
+    athlete = demo_athlete(db)
+    groups = find_duplicate_groups(db, athlete.id, limit)
+    return {
+        "groups": groups,
+        "group_count": len(groups),
+        "duplicated_load": round(sum(g["duplicated_load"] for g in groups), 1),
+    }
+
+
+@router.delete("/activities/{activity_id}", status_code=204)
+def remove_activity(activity_id: int, db: Session = Depends(get_db)):
+    athlete = demo_athlete(db)
+    if not delete_activity(db, athlete.id, activity_id):
+        raise HTTPException(404, "Activity not found")
 
 @router.patch("/activities/{activity_id}/classification")
 def update_activity_classification(activity_id: int, payload: ActivityClassificationUpdate, db: Session = Depends(get_db)):
@@ -324,6 +349,9 @@ def disconnect_strava(db: Session = Depends(get_db)):
 
 
 def _active_strava_import(db: Session, athlete_id: int):
+    # Clear abandoned sessions first, otherwise a sync that died mid-run blocks every
+    # subsequent attempt with "already running".
+    reap_stale_sessions(db, athlete_id)
     return db.scalar(select(ImportSession).where(
         ImportSession.athlete_id == athlete_id,
         ImportSession.source == "strava",
