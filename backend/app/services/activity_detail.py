@@ -27,7 +27,6 @@ def downsample(samples: list[dict], max_points: int = MAX_CHART_POINTS) -> list[
     if not samples:
         return []
     durations = sample_durations(samples)
-    total = sum(durations) or float(len(samples))
     bucket_count = min(max_points, len(samples))
     step = len(samples) / bucket_count
 
