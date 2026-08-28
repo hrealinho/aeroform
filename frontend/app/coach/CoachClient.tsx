@@ -2,6 +2,7 @@
 
 import {useCallback, useEffect, useMemo, useState} from "react";
 import {API} from "@/lib/api";
+import {formatDuration} from "@/lib/datetime";
 
 type Evidence={metric:string;value:any;period?:string};
 type Message={id:number;role:"user"|"assistant";content:string;evidence:Evidence[];created_at:string};
@@ -11,7 +12,7 @@ type Context={history:{activity_count:number;first_activity?:string;last_activit
 type Profile={available_hours_per_week?:number|null;preferred_long_day?:number|null;preferred_rest_day?:number|null;doubles_allowed:boolean;preferences:Record<string,any>};
 
 const DAYS=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
-function hours(s?:number){return s?`${Math.round(s/360)/10} h`:""}
+const hours=formatDuration;
 function commandLabel(c:Command){
   if(c.action==="create_workout") return `Add ${c.name||c.sport} · ${c.scheduled_at?.slice(0,10)} · ${hours(c.duration_s)} · ${c.intensity||""}`;
   if(c.action==="move_workout") return `Move workout #${c.workout_id} → ${c.scheduled_at?.slice(0,10)}`;
@@ -101,7 +102,7 @@ export default function CoachClient(){
         <label className="checkLabel"><input type="checkbox" checked={profile.doubles_allowed} onChange={e=>setProfile({...profile,doubles_allowed:e.target.checked})}/> Doubles allowed</label>
         <button className="button" disabled={busy==="profile"} type="submit">{busy==="profile"?"Saving…":"Save preferences"}</button>
       </form>
-      <div className="section coachContext"><h3>Context used</h3><div className="listRow"><span>Current block</span><b>{context?.current_block?.name||"None"}</b></div><div className="listRow"><span>Typical weekly hours</span><b>{context?.state.typical_weekly_hours_8w?.toFixed(1)||"0.0"} h</b></div><div className="listRow"><span>28-day adherence</span><b>{context?.adherence_28d_pct==null?"Not enough matched plan data":`${context.adherence_28d_pct.toFixed(0)}%`}</b></div></div>
+      <div className="section coachContext"><h3>Context used</h3><div className="listRow"><span>Current block</span><b>{context?.current_block?.name||"None"}</b></div><div className="listRow"><span>Typical weekly hours</span><b>{context?.state.typical_weekly_hours_8w!=null?formatDuration(context.state.typical_weekly_hours_8w*3600):"-"}</b></div><div className="listRow"><span>28-day adherence</span><b>{context?.adherence_28d_pct==null?"Not enough matched plan data":`${context.adherence_28d_pct.toFixed(0)}%`}</b></div></div>
       </section>
     </div>
 

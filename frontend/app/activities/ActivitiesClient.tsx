@@ -1,6 +1,7 @@
 "use client";
 import {useEffect,useState} from "react";
 import {API} from "@/lib/api";
+import {formatDuration} from "@/lib/datetime";
 
 const SPORTS=["running","trail_running","cycling","hiking","mountaineering","climbing","other"];
 
@@ -56,6 +57,6 @@ export default function ActivitiesClient(){
     </div>}
     <div className="card section activityTableWrap"><table className="table"><thead><tr><th>Date</th><th>Sport</th><th>Duration</th><th>Distance</th><th>Vertical</th><th>Overall</th><th>Metabolic</th><th>Mechanical</th><th>Downhill</th><th>Method</th></tr></thead><tbody>{activities.map(a=>{
       const confidence=a.classification?.confidence;
-      return <tr key={a.id}><td>{new Date(a.start_time).toLocaleDateString()}</td><td><div className="classificationCell"><select className="input compact" disabled={busy===a.id} value={a.sport} onChange={e=>reclassify(a.id,e.target.value)}>{SPORTS.map(s=><option key={s}>{s}</option>)}</select>{confidence&&<small className="muted">{confidence}: {a.classification?.reason}</small>}</div></td><td>{(a.duration_s/3600).toFixed(1)} h</td><td>{a.distance_m?(a.distance_m/1000).toFixed(1)+" km":"-"}</td><td>{a.elevation_gain_m!=null||a.elevation_loss_m!=null?<><span>↑{a.elevation_gain_m!=null?Math.round(a.elevation_gain_m)+" m":"-"}</span><br/><span>↓{a.elevation_loss_m!=null?Math.round(a.elevation_loss_m)+" m":"-"}</span></>:"-"}</td><td><b>{a.training_load?.toFixed?.(0)??"-"}</b></td><td>{a.metabolic_load?.toFixed?.(0)??"-"}</td><td>{a.mechanical_load?.toFixed?.(0)??"-"}</td><td>{a.descent_load?.toFixed?.(0)??"-"}</td><td><small>{a.load_method||"-"}<br/>{a.load_confidence||"-"}</small></td></tr>
+      return <tr key={a.id}><td>{new Date(a.start_time).toLocaleDateString()}</td><td><div className="classificationCell"><select className="input compact" disabled={busy===a.id} value={a.sport} onChange={e=>reclassify(a.id,e.target.value)}>{SPORTS.map(s=><option key={s}>{s}</option>)}</select>{confidence&&<small className="muted">{confidence}: {a.classification?.reason}</small>}</div></td><td>{formatDuration(a.duration_s)}</td><td>{a.distance_m?(a.distance_m/1000).toFixed(1)+" km":"-"}</td><td>{a.elevation_gain_m!=null||a.elevation_loss_m!=null?<><span>↑{a.elevation_gain_m!=null?Math.round(a.elevation_gain_m)+" m":"-"}</span><br/><span>↓{a.elevation_loss_m!=null?Math.round(a.elevation_loss_m)+" m":"-"}</span></>:"-"}</td><td><b>{a.training_load?.toFixed?.(0)??"-"}</b></td><td>{a.metabolic_load?.toFixed?.(0)??"-"}</td><td>{a.mechanical_load?.toFixed?.(0)??"-"}</td><td>{a.descent_load?.toFixed?.(0)??"-"}</td><td><small>{a.load_method||"-"}<br/>{a.load_confidence||"-"}</small></td></tr>
     })}</tbody></table></div></>;
 }

@@ -21,7 +21,11 @@ def explain_workout(db: Session, athlete_id: int, workout: PlannedWorkout) -> di
     comparable_sorted = sorted(comparable, key=lambda row: float(row[0].duration_s or 0), reverse=True)[:3]
     evidence = [{
         "activity_id": a.id, "date": a.start_time.date().isoformat(), "name": a.name,
-        "duration_h": round(float(a.duration_s or 0) / 3600, 1), "load": round(float(m.training_load or 0), 1) if m else None,
+        # duration_s is authoritative; duration_h is kept for existing consumers but is
+        # rounded, so it cannot be turned back into exact minutes.
+        "duration_s": float(a.duration_s or 0),
+        "duration_h": round(float(a.duration_s or 0) / 3600, 1),
+        "load": round(float(m.training_load or 0), 1) if m else None,
     } for a, m in comparable_sorted]
 
     reasons = []

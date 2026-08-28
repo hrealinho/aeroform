@@ -2,7 +2,7 @@
 
 import {useCallback, useEffect, useMemo, useState} from "react";
 import {API} from "@/lib/api";
-import {localDateTimeToUTC, localISODate, localISODateOf} from "@/lib/datetime";
+import {formatDuration, formatDurationHours, localDateTimeToUTC, localISODate, localISODateOf} from "@/lib/datetime";
 
 const SPORTS = ["running", "trail_running", "cycling", "hiking", "mountaineering", "climbing"];
 const INTENSITIES = ["recovery", "easy", "endurance", "steady", "tempo", "threshold", "vo2", "anaerobic", "race"];
@@ -17,7 +17,8 @@ type Projection = {warnings:{code:string;severity:string;message:string}[]; week
 
 const isoDate=localISODate;
 function mondayFor(d:Date){const x=new Date(d);const day=(x.getDay()+6)%7;x.setDate(x.getDate()-day);x.setHours(12,0,0,0);return x}
-function hours(s?:number){return s ? `${Math.round(s/360)/10}h` : ""}
+// Durations read as clock time, not as a decimal fraction of an hour.
+const hours=formatDuration;
 function km(m?:number){return m ? `${Math.round(m/100)/10} km` : ""}
 function dayLabel(d:Date){return d.toLocaleDateString(undefined,{weekday:"short",day:"numeric",month:"short"})}
 
@@ -143,7 +144,7 @@ export default function CalendarClient(){
         <label>Recovery (min)<input className="input" type="number" min="0" step="0.5" value={form.recoveryMin} onChange={e=>setForm({...form,recoveryMin:e.target.value})}/></label>
         <label>Cool-down (min)<input className="input" type="number" min="0" value={form.cooldownMin} onChange={e=>setForm({...form,cooldownMin:e.target.value})}/></label>
       </div><button className="button section" type="submit">Add workout</button></form>
-      <div className="card"><h2>Plan vs actual</h2><p className="muted">Automatically match imported activities to planned sessions using sport, time, duration and distance. Matches never duplicate activity load.</p><button className="button" onClick={autoMatch}>Match completed activities</button><div className="section"><h3>Projection rule checks</h3><p className="muted">v0.4 validates weekly load jumps, key-session spacing, locks and availability before AI proposals can be applied.</p></div>{why&&<div className="section whyPanel"><div className="row spread"><h3>{why.title}</h3><button className="button secondary" onClick={()=>setWhy(null)}>Close</button></div><ul>{why.reasons.map((r,i)=><li key={i}>{r}</li>)}</ul>{why.evidence.length>0&&<div className="evidenceRow">{why.evidence.map((e:any,i:number)=><span className="badge" key={i}>{e.date} · {e.duration_h}h · {e.load??"?"} load</span>)}</div>}</div>}</div>
+      <div className="card"><h2>Plan vs actual</h2><p className="muted">Automatically match imported activities to planned sessions using sport, time, duration and distance. Matches never duplicate activity load.</p><button className="button" onClick={autoMatch}>Match completed activities</button><div className="section"><h3>Projection rule checks</h3><p className="muted">v0.4 validates weekly load jumps, key-session spacing, locks and availability before AI proposals can be applied.</p></div>{why&&<div className="section whyPanel"><div className="row spread"><h3>{why.title}</h3><button className="button secondary" onClick={()=>setWhy(null)}>Close</button></div><ul>{why.reasons.map((r,i)=><li key={i}>{r}</li>)}</ul>{why.evidence.length>0&&<div className="evidenceRow">{why.evidence.map((e:any,i:number)=><span className="badge" key={i}>{e.date} · {e.duration_s!=null?formatDuration(e.duration_s):formatDurationHours(e.duration_h)} · {e.load??"?"} load</span>)}</div>}</div>}</div>
     </div>
   </>
 }
