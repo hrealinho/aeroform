@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 from app.core.config import settings
 
 DEFAULT_CLAUDE_MODEL = "claude-opus-5"
+# Conservative default: long-GA and supports structured outputs. Override with AI_MODEL.
+DEFAULT_OPENAI_MODEL = "gpt-4o"
 
 
 class RefinedCommand(BaseModel):
@@ -138,12 +140,54 @@ seed. Explain your reasoning in terms of training principles, not in terms of th
 were given."""
 
 
-class AnthropicProvider:
-    """Refines a deterministic plan seed with Claude.
+class StructuredLLMProvider:
+    """Shared behaviour for any vendor that can return a validated schema.
 
-    Structured outputs are used rather than free text: the model returns a schema the
-    application already validates, so there is no JSON parsing to get wrong.
+    Everything that defines *what the model is allowed to do* lives here - the system
+    prompt, the context slice, the output schema - so it cannot drift between vendors.
+    A concrete provider implements only `_parse`, the single vendor-specific call. That
+    is why swapping model vendors changes no training logic at all.
     """
+
+    name = "structured-llm"
+
+    def _parse(self, output_model, system: str, prompt: str):  # pragma: no cover - abstract
+        raise NotImplementedError
+
+    def synthesize_analysis(self, question: str, context: dict, draft: dict) -> dict:
+        result = self._parse(
+            CoachAnswer,
+            "You are an endurance coach. Rewrite the supplied draft answer so it reads clearly and "
+            "directly to an athlete. Keep every number exactly as given - they were computed from the "
+            "athlete's data and you must not alter, round or add to them. Do not introduce facts that "
+            "are not in the draft or the context.",
+            json.dumps({"question": question, "draft": draft, "context": _analysis_context(context)}, default=str),
+        )
+        # Evidence stays exactly as the deterministic layer produced it.
+        return {**draft, "answer": result.answer, "confidence": result.confidence or draft.get("confidence", "medium")}
+
+    def refine_plan(self, kind: str, context: dict, seed_summary: str, seed_commands: list[dict]) -> ProviderPlan:
+        if not seed_commands:
+            return ProviderPlan(seed_summary, seed_commands, self.name)
+        result = self._parse(
+            RefinedPlan,
+            PLANNER_SYSTEM,
+            json.dumps({
+                "task": kind,
+                "seed_summary": seed_summary,
+                "seed_commands": seed_commands,
+                "athlete": _planning_context(context),
+            }, default=str),
+        )
+        commands = [c.model_dump(exclude_none=True) for c in result.commands]
+        summary = result.summary or seed_summary
+        if result.reasoning:
+            summary = f"{summary} {result.reasoning}"
+        return ProviderPlan(summary, commands, self.name)
+
+
+class AnthropicProvider(StructuredLLMProvider):
+    """Refines a deterministic plan seed with Claude."""
 
     name = "anthropic"
 
@@ -178,36 +222,38 @@ class AnthropicProvider:
             raise RuntimeError("Model returned no structured output")
         return parsed
 
-    def synthesize_analysis(self, question: str, context: dict, draft: dict) -> dict:
-        result = self._parse(
-            CoachAnswer,
-            "You are an endurance coach. Rewrite the supplied draft answer so it reads clearly and "
-            "directly to an athlete. Keep every number exactly as given - they were computed from the "
-            "athlete's data and you must not alter, round or add to them. Do not introduce facts that "
-            "are not in the draft or the context.",
-            json.dumps({"question": question, "draft": draft, "context": _analysis_context(context)}, default=str),
-        )
-        # Evidence stays exactly as the deterministic layer produced it.
-        return {**draft, "answer": result.answer, "confidence": result.confidence or draft.get("confidence", "medium")}
 
-    def refine_plan(self, kind: str, context: dict, seed_summary: str, seed_commands: list[dict]) -> ProviderPlan:
-        if not seed_commands:
-            return ProviderPlan(seed_summary, seed_commands, self.name)
-        result = self._parse(
-            RefinedPlan,
-            PLANNER_SYSTEM,
-            json.dumps({
-                "task": kind,
-                "seed_summary": seed_summary,
-                "seed_commands": seed_commands,
-                "athlete": _planning_context(context),
-            }, default=str),
+class OpenAIProvider(StructuredLLMProvider):
+    """The same contract, served by an OpenAI model.
+
+    Uses chat completions with a Pydantic `response_format`, the surface whose parsed
+    output and refusal fields are stable. A refusal arrives as a populated
+    `message.refusal` rather than an exception, so it is checked before reading `parsed`.
+    """
+
+    name = "openai"
+
+    def __init__(self) -> None:
+        try:
+            from openai import OpenAI
+        except ImportError as exc:  # pragma: no cover - depends on install extras
+            raise RuntimeError("AI_PROVIDER=openai requires the 'openai' package") from exc
+        self._client = OpenAI(api_key=settings.ai_api_key) if settings.ai_api_key else OpenAI()
+        # Any OpenAI model supporting structured outputs works; AI_MODEL selects it.
+        self._model = settings.ai_model if not settings.ai_model.startswith("claude-") else DEFAULT_OPENAI_MODEL
+
+    def _parse(self, output_model, system: str, prompt: str):
+        response = self._client.chat.completions.parse(
+            model=self._model,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+            response_format=output_model,
         )
-        commands = [c.model_dump(exclude_none=True) for c in result.commands]
-        summary = result.summary or seed_summary
-        if result.reasoning:
-            summary = f"{summary} {result.reasoning}"
-        return ProviderPlan(summary, commands, self.name)
+        message = response.choices[0].message
+        if getattr(message, "refusal", None):
+            raise RuntimeError(f"Model declined the request: {message.refusal}")
+        if message.parsed is None:
+            raise RuntimeError("Model returned no structured output")
+        return message.parsed
 
 
 def _planning_context(context: dict) -> dict:
@@ -240,6 +286,8 @@ def _analysis_context(context: dict) -> dict:
 def get_provider():
     if settings.ai_provider == "anthropic":
         return AnthropicProvider()
+    if settings.ai_provider == "openai":
+        return OpenAIProvider()
     if settings.ai_provider == "http_json":
         return HttpJsonProvider()
     return LocalGroundedProvider()

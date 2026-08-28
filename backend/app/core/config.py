@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "Aeroform"
-    app_version: str = "0.7.1"
+    app_version: str = "0.7.2"
     app_secret: str = "change-me-in-production"
     database_url: str = "sqlite:///./endurance_ai.db"
     storage_path: str = "./data/raw"
@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     # small JSON contract without coupling planning rules to one model vendor.
     # local     - deterministic, no credentials, used in tests
     # anthropic - Claude refines the deterministic seed (set ANTHROPIC_API_KEY or AI_API_KEY)
+    # openai    - an OpenAI model does the same (set OPENAI_API_KEY or AI_API_KEY, and AI_MODEL)
     # http_json  - vendor-neutral JSON gateway
     ai_provider: str = "local"
     ai_model: str = "claude-opus-5"

@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.7.2 - OpenAI provider
+
+- **`AI_PROVIDER=openai`** works alongside `anthropic`, `local` and `http_json`.
+- The provider-agnostic parts - system prompt, context slice, output schema - moved to a shared
+  `StructuredLLMProvider` base. A vendor now implements one method, `_parse`. Swapping vendors
+  therefore changes no training logic, and a test asserts both receive byte-identical
+  instructions and payloads.
+- Vendor refusals differ in shape and both are handled: Claude reports `stop_reason: "refusal"`
+  on the response, OpenAI populates `message.refusal`. Either raises, so the caller falls back
+  to the validated deterministic seed.
+
+
 ## v0.7.1 - Claude as the plan refiner
 
 - **`AI_PROVIDER=anthropic`** adds a real Claude provider (`anthropic` SDK 1.2.0, `claude-opus-5`,

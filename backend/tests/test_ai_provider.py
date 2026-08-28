@@ -166,3 +166,81 @@ def test_provider_failure_falls_back_to_the_deterministic_seed(client, monkeypat
     asked = client.post("/api/v1/coach/ask", json={"question": "Why am I tired this week?"}).json()
     assert asked["answer"]
     assert asked["provider_error"]
+
+
+# --- vendor independence ------------------------------------------------------
+
+class _FakeChat:
+    """Stands in for client.chat.completions, mirroring the OpenAI response shape."""
+
+    def __init__(self, parsed, refusal=None):
+        self.parsed, self.refusal, self.calls = parsed, refusal, []
+
+    def parse(self, **kwargs):
+        self.calls.append(kwargs)
+        message = SimpleNamespace(parsed=self.parsed, refusal=self.refusal)
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+
+def _openai(parsed, refusal=None):
+    from app.ai.provider import OpenAIProvider
+
+    provider = OpenAIProvider.__new__(OpenAIProvider)
+    provider._model = "gpt-4o"
+    chat = _FakeChat(parsed, refusal)
+    provider._client = SimpleNamespace(chat=SimpleNamespace(completions=chat))
+    return provider, chat
+
+
+def test_openai_provider_refines_a_plan():
+    refined = RefinedPlan(summary="Reshaped", reasoning="Better spacing.",
+                          commands=[{**SEED[0], "name": "5x6min"}])
+    provider, chat = _openai(refined)
+    plan = provider.refine_plan("generate_week", {"as_of": "2026-09-01"}, "seed", SEED)
+
+    assert plan.provider == "openai"
+    assert plan.commands[0]["name"] == "5x6min"
+    assert chat.calls[0]["response_format"] is RefinedPlan
+    assert chat.calls[0]["model"] == "gpt-4o"
+
+
+def test_openai_refusal_raises_so_the_caller_falls_back():
+    """OpenAI reports a decline on message.refusal, not as an exception."""
+    provider, _ = _openai(None, refusal="I can't help with that.")
+    with pytest.raises(RuntimeError, match="declined"):
+        provider.refine_plan("generate_week", {"as_of": "2026-09-01"}, "seed", SEED)
+
+
+def test_both_vendors_are_held_to_the_same_contract():
+    """The system prompt and context slice live on the shared base, so they cannot drift
+    between vendors. If they do, swapping vendors would change training behaviour."""
+    refined = RefinedPlan(summary="s", commands=[SEED[0]])
+    claude = _provider(refined)
+    openai_provider, chat = _openai(refined)
+    context = {"as_of": "2026-09-01", "state": {"form": 3}, "recent_activities": [{"secret": "x"}]}
+
+    claude.refine_plan("generate_week", context, "seed", SEED)
+    openai_provider.refine_plan("generate_week", context, "seed", SEED)
+
+    claude_call = claude._client.messages.calls[0]
+    openai_call = chat.calls[0]
+    # Identical instructions and identical payload.
+    assert claude_call["system"] == openai_call["messages"][0]["content"]
+    assert claude_call["messages"][0]["content"] == openai_call["messages"][1]["content"]
+    assert "secret" not in openai_call["messages"][1]["content"]
+
+
+def test_provider_selection_is_config_driven(monkeypatch):
+    from app.ai.provider import AnthropicProvider, OpenAIProvider
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "ai_provider", "openai")
+    monkeypatch.setattr(OpenAIProvider, "__init__", lambda self: None)
+    assert isinstance(get_provider(), OpenAIProvider)
+
+    monkeypatch.setattr(settings, "ai_provider", "anthropic")
+    monkeypatch.setattr(AnthropicProvider, "__init__", lambda self: None)
+    assert isinstance(get_provider(), AnthropicProvider)
+
+    monkeypatch.setattr(settings, "ai_provider", "local")
+    assert isinstance(get_provider(), LocalGroundedProvider)

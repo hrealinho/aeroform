@@ -229,6 +229,19 @@ approve it - so a bad response degrades to the deterministic plan rather than to
 Only a narrow context slice is sent (state, block, objectives, profile, constraints, six weeks
 of summaries). Raw streams and full history never leave the application.
 
+### OpenAI
+
+```env
+AI_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+AI_MODEL=gpt-4o
+```
+
+Identical contract. Both vendors share one base class holding the system prompt, the context
+slice and the output schema, so switching vendors changes no training logic - a test asserts the
+two receive byte-identical instructions and payloads. Set `AI_MODEL` to any model of that vendor
+supporting structured outputs.
+
 ### Vendor-neutral gateway
 
 For a remote model, v0.5 exposes a small vendor-neutral HTTP JSON hook:
