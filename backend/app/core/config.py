@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "Endurance AI"
+    app_name: str = "Aeroform"
     app_secret: str = "change-me-in-production"
     database_url: str = "sqlite:///./endurance_ai.db"
     storage_path: str = "./data/raw"

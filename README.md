@@ -1,4 +1,4 @@
-# Endurance AI Platform
+# Aeroform Platform
 
 Training-first endurance analytics, season planning and grounded AI coaching. The product deliberately keeps social mechanics out of the core experience: activities become private training data used for analytics, projections and adaptive planning.
 
