@@ -345,3 +345,36 @@ def test_fit_and_tcx_lap_parsing_is_wired(monkeypatch):
     assert parsed.laps[0].distance_m == 1000
     assert ParsedActivity(sport="running", subtype=None, name="x",
                           start_time=datetime(2026, 5, 1, tzinfo=timezone.utc), duration_s=1).laps == []
+
+
+def test_calendar_exposes_activity_ids_so_they_can_be_linked(client, session, athlete):
+    """The calendar must return activity ids, and the matched workout's id, or the
+    calendar cannot link through to an activity's detail page."""
+    from datetime import date as _date
+
+    from app.domain.models import Activity, ActivityMetrics
+    from app.services.dedup import activity_fingerprint
+
+    start = datetime.now(timezone.utc).replace(hour=9, minute=0, second=0, microsecond=0)
+    activity = Activity(
+        athlete_id=athlete.id, sport="running", name="Morning run", start_time=start,
+        duration_s=3600, moving_time_s=3550, distance_m=10000,
+        fingerprint=activity_fingerprint("running", start, 3600, 10000),
+    )
+    session.add(activity)
+    session.flush()
+    session.add(ActivityMetrics(activity_id=activity.id, training_load=55.0, details={}))
+    session.commit()
+
+    workout = client.post("/api/v1/planned-workouts", json={
+        "scheduled_at": start.isoformat(), "sport": "running", "name": "Easy run",
+        "duration_s": 3600, "intensity": "easy",
+    }).json()
+    client.post(f"/api/v1/planned-workouts/{workout['id']}/match", json={"activity_id": activity.id})
+
+    today = _date.today().isoformat()
+    body = client.get(f"/api/v1/calendar?start={today}&end={today}").json()
+    assert [a["id"] for a in body["activities"]] == [activity.id]
+    assert body["planned"][0]["matched_activity_id"] == activity.id
+    # And the id the calendar hands out resolves on the detail endpoint.
+    assert client.get(f"/api/v1/activities/{activity.id}").status_code == 200

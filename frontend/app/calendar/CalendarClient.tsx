@@ -2,6 +2,7 @@
 
 import {useCallback, useEffect, useMemo, useState} from "react";
 import {API} from "@/lib/api";
+import Link from "next/link";
 import Icon from "@/components/Icon";
 import {formatDuration, formatDurationHours, localDateTimeToUTC, localISODate, localISODateOf} from "@/lib/datetime";
 
@@ -153,9 +154,15 @@ export default function CalendarClient(){
               <strong>{w.name}</strong>
               <div className="workoutMeta"><span>{hours(w.duration_s)}</span><span>{km(w.distance_m)}</span><span>Load {Math.round(w.projected_load||0)}</span></div>
               <div className="row"><span className="badge">{w.intensity}</span>{w.matched_activity_id&&<span className="badge success">matched</span>}</div>
-              <div className="cardActions"><button onClick={()=>whyWorkout(w)}>Why?</button><button onClick={()=>toggleLock(w)}>{w.locked?"Unlock":"Lock"}</button><button disabled={w.locked} onClick={()=>remove(w)}>Delete</button></div>
+              <div className="cardActions"><button onClick={()=>whyWorkout(w)}>Why?</button><button onClick={()=>toggleLock(w)}>{w.locked?"Unlock":"Lock"}</button><button disabled={w.locked} onClick={()=>remove(w)}>Delete</button>{w.matched_activity_id&&<Link href={`/activities/${w.matched_activity_id}`} className="cardActionLink">View actual</Link>}</div>
             </article>)}
-            {actual.map(a=><article className="actualCard" key={a.id}><div className="row spread"><span className="sportLabel">ACTUAL · {a.sport.replace("_"," ")}</span><span className="badge success">{Math.round(a.training_load||0)} load</span></div><strong>{a.name||a.sport}</strong><div className="workoutMeta"><span>{hours(a.duration_s)}</span><span>{km(a.distance_m)}</span>{a.elevation_gain_m?<span>{Math.round(a.elevation_gain_m)}m+</span>:null}</div></article>)}
+            {/* A completed activity in the calendar opens the same detail page the
+                Activities table links to, so there is one route to an activity. */}
+            {actual.map(a=><Link href={`/activities/${a.id}`} className="actualCard cardLink" key={a.id}>
+              <div className="row spread"><span className="sportLabel">ACTUAL · {a.sport.replace("_"," ")}</span><span className="badge success">{Math.round(a.training_load||0)} load</span></div>
+              <strong>{a.name||a.sport}</strong>
+              <div className="workoutMeta"><span>{hours(a.duration_s)}</span><span>{km(a.distance_m)}</span>{a.elevation_gain_m?<span>{Math.round(a.elevation_gain_m)}m+</span>:null}</div>
+            </Link>)}
             {!loading&&planned.length===0&&actual.length===0&&<div className="emptyDay">Drop workout here</div>}
           </div>
         </section>

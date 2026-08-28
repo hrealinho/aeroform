@@ -268,6 +268,14 @@ button:not(.button):disabled { opacity: .4; cursor: not-allowed; }
 .workoutCard:active { cursor: grabbing; }
 .workoutCard.matched { border-left-color: var(--good); }
 .actualCard { border-left: 2px solid var(--good); }
+/* A whole card that is a link still has to look like a card, not like text. */
+.cardLink { text-decoration: none; color: inherit; transition: border-color .1s ease, background .1s ease; }
+.cardLink:hover { background: var(--surface-3); border-color: var(--border-strong); }
+.cardActionLink {
+  padding: 3px 7px; border: 1px solid var(--border); border-radius: var(--r-xs);
+  font-size: var(--fs-xs); color: var(--ink-3);
+}
+.cardActionLink:hover { color: var(--ink-1); border-color: var(--border-strong); }
 .objectiveCard { border-left: 2px solid var(--series-5); font-weight: 550; }
 .workoutMeta { display: flex; gap: 7px; flex-wrap: wrap; color: var(--ink-3); }
 .cardActions { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 1px; }
