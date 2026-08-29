@@ -279,3 +279,40 @@ def test_resolve_provider_returns_local_when_construction_fails(monkeypatch):
     provider, error = resolve_provider()
     assert isinstance(provider, LocalGroundedProvider)
     assert "anthropic provider unavailable" in error
+
+
+def test_a_credential_error_keeps_the_part_that_says_what_to_do(monkeypatch):
+    """Regression: the error was truncated at 200 chars, which cut the SDK's own
+    "...or set the OPENAI_API_KEY environment variable" tail and produced "or set)." -
+    the error minus its answer."""
+    import app.ai.provider as provider_module
+    from app.ai.provider import resolve_provider
+    from app.core.config import settings
+
+    long_error = (
+        "Missing credentials. Please pass an `api_key`, `workload_identity`, `admin_api_key`, "
+        "or set the `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY` environment variable."
+    )
+    monkeypatch.setattr(settings, "ai_provider", "openai")
+    monkeypatch.setattr(provider_module, "OpenAIProvider",
+                        lambda: (_ for _ in ()).throw(RuntimeError(long_error)))
+
+    _, error = resolve_provider()
+    assert "OPENAI_API_KEY" in error
+    assert error.rstrip().endswith("container.")      # the hint survived
+    assert "docker compose up" in error
+
+
+def test_the_hint_names_the_right_variable_per_provider(monkeypatch):
+    import app.ai.provider as provider_module
+    from app.ai.provider import resolve_provider
+    from app.core.config import settings
+
+    for provider_name, attr, expected in [
+        ("openai", "OpenAIProvider", "OPENAI_API_KEY"),
+        ("anthropic", "AnthropicProvider", "ANTHROPIC_API_KEY"),
+    ]:
+        monkeypatch.setattr(settings, "ai_provider", provider_name)
+        monkeypatch.setattr(provider_module, attr, lambda: (_ for _ in ()).throw(RuntimeError("no key")))
+        _, error = resolve_provider()
+        assert expected in error

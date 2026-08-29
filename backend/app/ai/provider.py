@@ -295,7 +295,29 @@ def resolve_provider() -> tuple[object, str | None]:
     try:
         return get_provider(), None
     except Exception as exc:
-        return LocalGroundedProvider(), f"{settings.ai_provider} provider unavailable: {str(exc)[:200]}"
+        # Not truncated to 200 chars any more: an SDK's credential error ends with the name
+        # of the environment variable to set, which is the only actionable part, and cutting
+        # it produced "...or set)." - the error minus its answer.
+        return LocalGroundedProvider(), (
+            f"{settings.ai_provider} provider unavailable: {exc}{_credential_hint()}"
+        )
+
+
+def _credential_hint() -> str:
+    """Point at the specific thing to fix, including the Docker case.
+
+    The SDK error names an environment variable, but in a container the variable has to be
+    present *in the container*, which is a different problem from having it in a shell.
+    """
+    env_var = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}.get(settings.ai_provider)
+    if not env_var:
+        return ""
+    return (
+        f" | Set {env_var} (or AI_API_KEY) where the API process can see it. Under Docker that"
+        f" means exporting it before `docker compose up`, or adding it to a .env file beside"
+        f" docker-compose.yml - a variable set only in your shell afterwards never reaches the"
+        f" container."
+    )
 
 
 def get_provider():
