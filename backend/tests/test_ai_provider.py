@@ -154,7 +154,7 @@ def test_provider_failure_falls_back_to_the_deterministic_seed(client, monkeypat
         def refine_plan(self, *a, **k): raise RuntimeError("model unavailable")
         def synthesize_analysis(self, *a, **k): raise RuntimeError("model unavailable")
 
-    monkeypatch.setattr(routes, "get_provider", lambda: Broken())
+    monkeypatch.setattr(routes, "resolve_provider", lambda: (Broken(), None))
     client.post("/api/v1/objectives", json={
         "name": "Race", "event_date": (date.today() + timedelta(days=90)).isoformat(), "sport": "running"})
 
@@ -244,3 +244,38 @@ def test_provider_selection_is_config_driven(monkeypatch):
 
     monkeypatch.setattr(settings, "ai_provider", "local")
     assert isinstance(get_provider(), LocalGroundedProvider)
+
+
+def test_a_broken_provider_config_degrades_instead_of_500ing(client, monkeypatch):
+    """Setting AI_PROVIDER to a vendor whose SDK or key is missing must not take down
+    planning: the constructor raises before any request, outside the call's try/except."""
+    import app.ai.provider as provider_module
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "ai_provider", "openai")
+    monkeypatch.setattr(provider_module, "OpenAIProvider",
+                        lambda: (_ for _ in ()).throw(RuntimeError("no api key configured")))
+
+    week = client.post("/api/v1/coach/generate-week", json={})
+    assert week.status_code == 200
+    body = week.json()
+    assert body["provider"] == "local_fallback"
+    assert "openai provider unavailable" in body["summary"]
+    assert body["validation"]["valid"] is True
+
+    asked = client.post("/api/v1/coach/ask", json={"question": "Why am I tired this week?"})
+    assert asked.status_code == 200
+    assert "openai provider unavailable" in asked.json()["provider_error"]
+
+
+def test_resolve_provider_returns_local_when_construction_fails(monkeypatch):
+    import app.ai.provider as provider_module
+    from app.ai.provider import LocalGroundedProvider, resolve_provider
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "ai_provider", "anthropic")
+    monkeypatch.setattr(provider_module, "AnthropicProvider",
+                        lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    provider, error = resolve_provider()
+    assert isinstance(provider, LocalGroundedProvider)
+    assert "anthropic provider unavailable" in error

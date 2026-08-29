@@ -24,16 +24,24 @@ MAX_PEAK_MULTIPLE = 1.45
 RECOVERY_EVERY = 4
 RECOVERY_FACTOR = 0.62
 
-# Fraction of peak weekly load each phase targets.
+# Fraction of peak weekly load each phase targets. The phase named "peak" must be the
+# actual volume peak - it previously sat below "specific", so the highest week landed in
+# the wrong phase and a reader could not tell where the plan actually topped out.
 PHASE_INTENSITY = {
     "foundation": 0.80,
     "base": 0.90,
-    "build": 1.00,
-    "specific": 1.00,
-    "peak": 0.85,
+    "build": 0.95,
+    "specific": 0.95,
+    "peak": 1.00,
     "taper": 0.55,
     "recovery": RECOVERY_FACTOR,
 }
+
+# A taper descends; it is not a flat block. Checked against a well-regarded commercial
+# marathon plan, whose three taper weeks ran at roughly 81%, 56% and 19% of peak volume:
+# volume comes off gradually while intensity is retained, rather than dropping to a
+# single low number and sitting there. Indexed from the first taper week.
+TAPER_PROGRESSION = (0.80, 0.55, 0.30)
 
 
 @dataclass
@@ -87,7 +95,9 @@ def _phase_sequence(total_weeks: int, long_objective: bool) -> list[str]:
     """
     if total_weeks <= 0:
         return []
-    taper = 2 if long_objective else 1
+    # Three weeks for a long objective. Two was too short, and both weeks sat at the same
+    # volume, so it did not descend at all.
+    taper = 3 if long_objective else 2
     if total_weeks <= 2:
         return ["taper"] * total_weeks
     if total_weeks <= 4:
@@ -120,6 +130,7 @@ def periodise(
     phases = _phase_sequence(total_weeks, long_objective)
     if not phases:
         return []
+    taper_weeks = sum(1 for p in phases if p == "taper")
 
     base_load = max(float(typical_weekly_load or 0), 1.0)
     base_hours = max(float(typical_weekly_hours or 0), 0.5)
@@ -133,7 +144,14 @@ def periodise(
     for index, phase in enumerate(phases):
         # Recovery weeks interrupt loading phases only; a taper is already easy.
         is_recovery = phase in {"base", "build", "specific"} and (index + 1) % RECOVERY_EVERY == 0
-        factor = RECOVERY_FACTOR if is_recovery else PHASE_INTENSITY.get(phase, 1.0)
+        if phase == "taper":
+            # Position within the taper decides how much volume is left.
+            taper_index = index - (len(phases) - taper_weeks)
+            factor = TAPER_PROGRESSION[min(taper_index, len(TAPER_PROGRESSION) - 1)]
+        elif is_recovery:
+            factor = RECOVERY_FACTOR
+        else:
+            factor = PHASE_INTENSITY.get(phase, 1.0)
 
         if phase in {"base", "build", "specific"}:
             # Progress toward peak across the loading phases.

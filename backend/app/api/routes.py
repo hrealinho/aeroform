@@ -27,7 +27,7 @@ from app.tasks.imports import process_uploaded_files, sync_strava_history, sync_
 from app.importers.formats import activity_format
 from app.ai.context import build_athlete_context, PLAN_HORIZON_DAYS
 from app.ai.analyst import analyse_question
-from app.ai.provider import get_provider
+from app.ai.provider import resolve_provider
 from app.ai.planner import generate_week_seed, adapt_week_seed, generate_block_seed
 from app.planning.season import periodise
 from app.ai.commands import validate_commands, apply_commands
@@ -1037,13 +1037,15 @@ def coach_ask(payload: CoachAsk, db: Session = Depends(get_db)):
     athlete = demo_athlete(db)
     context = build_athlete_context(db, athlete)
     draft = analyse_question(context, payload.question)
-    provider = get_provider()
-    provider_error = None
-    try:
-        result = provider.synthesize_analysis(payload.question, context, draft)
-    except Exception as exc:
+    provider, provider_error = resolve_provider()
+    if provider_error is None:
+        try:
+            result = provider.synthesize_analysis(payload.question, context, draft)
+        except Exception as exc:
+            result = draft
+            provider_error = str(exc)[:300]
+    else:
         result = draft
-        provider_error = str(exc)[:300]
     db.add(CoachMessage(athlete_id=athlete.id, role="user", content=payload.question, evidence=[]))
     assistant = CoachMessage(athlete_id=athlete.id, role="assistant", content=result["answer"], evidence=result.get("evidence") or [])
     db.add(assistant); db.commit(); db.refresh(assistant)
@@ -1072,8 +1074,10 @@ def coach_generate_week(payload: GenerateWeekRequest, db: Session = Depends(get_
     seed_summary, seed_commands = generate_week_seed(
         context, week_start, payload.objective_id, payload.strategy,
         intent=None if payload.intent in (None, "auto") else payload.intent)
-    provider = get_provider()
+    provider, provider_error = resolve_provider()
     try:
+        if provider_error:
+            raise RuntimeError(provider_error)
         plan = provider.refine_plan("generate_week", context, seed_summary, seed_commands)
         commands, summary, provider_name = plan.commands, plan.summary, plan.provider
     except Exception as exc:
@@ -1300,8 +1304,10 @@ def coach_adapt_week(payload: AdaptWeekRequest, db: Session = Depends(get_db)):
     week_start = payload.week_start or (today - timedelta(days=today.weekday()))
     week_start = week_start - timedelta(days=week_start.weekday())
     seed_summary, seed_commands = adapt_week_seed(context, week_start)
-    provider = get_provider()
+    provider, provider_error = resolve_provider()
     try:
+        if provider_error:
+            raise RuntimeError(provider_error)
         plan = provider.refine_plan("adapt_week", context, seed_summary, seed_commands)
         commands, summary, provider_name = plan.commands, plan.summary, plan.provider
     except Exception as exc:

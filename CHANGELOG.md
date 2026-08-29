@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.7.2 - Taper fixes, and provider config that degrades instead of failing
+
+### Fixed
+
+- **A misconfigured `AI_PROVIDER` took down planning.** `get_provider()` was called outside
+  the caller's try/except in all three coach endpoints, so a missing SDK or unresolvable API
+  key raised during construction and returned a 500 rather than falling back to the
+  deterministic planner. Replaced with `resolve_provider()`, which returns the local provider
+  plus the reason, and the reason is surfaced in the response.
+- **The taper did not taper.** Both taper weeks sat at the same 55% of peak. Now three weeks
+  for a long objective (two for a short one) descending 80% / 55% / 30%, so volume comes off
+  gradually while intensity is retained. Checked against a 19-week commercial marathon plan
+  running roughly 81% / 56% / 19% across its taper.
+- **The "peak" phase was not the peak.** It sat at 0.85 while "specific" sat at 1.00, so the
+  highest week of the plan landed in the wrong phase and a reader could not tell where the
+  plan topped out.
+
+
 ## v0.7.2 - OpenAI provider
 
 - **`AI_PROVIDER=openai`** works alongside `anthropic`, `local` and `http_json`.

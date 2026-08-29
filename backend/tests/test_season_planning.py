@@ -32,14 +32,42 @@ def _context(**overrides):
 def test_plan_runs_backwards_from_the_race_and_ends_in_a_taper():
     blocks = periodise(date(2026, 9, 1), date(2027, 2, 1), 400, 8, long_objective=True, objective_name="UTMB")
     assert blocks[-1].block_type == "taper"
-    assert len(blocks[-1].weeks) == 2          # long objective gets two taper weeks
+    assert len(blocks[-1].weeks) == 3          # long objective gets three taper weeks
     assert [b.block_type for b in blocks] == ["base", "build", "specific", "peak", "taper"]
     assert blocks[0].start.weekday() == 0      # blocks start on a Monday
 
 
-def test_short_objective_gets_a_single_taper_week():
-    blocks = periodise(date(2026, 9, 1), date(2027, 2, 1), 400, 8, long_objective=False)
-    assert len(blocks[-1].weeks) == 1
+def test_short_objective_gets_a_shorter_taper():
+    short = periodise(date(2026, 9, 1), date(2027, 2, 1), 400, 8, long_objective=False)
+    long = periodise(date(2026, 9, 1), date(2027, 2, 1), 400, 8, long_objective=True)
+    assert len(short[-1].weeks) == 2
+    assert len(long[-1].weeks) == 3
+
+
+def test_the_taper_actually_descends():
+    """Regression: both taper weeks previously sat at the same 55% of peak, so the taper
+    did not taper. Checked against a commercial marathon plan running roughly
+    81% / 56% / 19% of peak volume across its three taper weeks."""
+    blocks = periodise(date(2026, 7, 27), date(2026, 12, 6), 400, 8, long_objective=True)
+    weeks = [w for b in blocks for w in b.weeks]
+    peak = max(w.target_load for w in weeks)
+    taper = [w for w in weeks if w.phase == "taper"]
+
+    assert len(taper) == 3
+    fractions = [w.target_load / peak for w in taper]
+    # Strictly decreasing, starting high so volume comes off gradually.
+    assert fractions[0] > fractions[1] > fractions[2]
+    assert 0.70 <= fractions[0] <= 0.90
+    assert fractions[-1] <= 0.40
+
+
+def test_the_peak_phase_holds_the_highest_week():
+    """Regression: "peak" sat at 0.85 while "specific" sat at 1.00, so the highest week
+    landed in the wrong phase."""
+    blocks = periodise(date(2026, 7, 27), date(2026, 12, 6), 400, 8, long_objective=True)
+    weeks = [w for b in blocks for w in b.weeks]
+    peak_week = max(weeks, key=lambda w: w.target_load)
+    assert peak_week.phase == "peak"
 
 
 @pytest.mark.parametrize(("weeks_out", "expected"), [(2, {"taper"}), (4, {"peak", "taper"})])

@@ -283,6 +283,21 @@ def _analysis_context(context: dict) -> dict:
     }
 
 
+def resolve_provider() -> tuple[object, str | None]:
+    """Return (provider, construction_error).
+
+    Constructing a remote provider can fail before any request is made: the SDK is not
+    installed, or no API key is resolvable. Those used to escape the caller's try/except
+    and return a 500, which meant a misconfigured AI_PROVIDER took down planning entirely
+    instead of degrading to the deterministic planner. The error is returned rather than
+    swallowed so the response can say why refinement did not happen.
+    """
+    try:
+        return get_provider(), None
+    except Exception as exc:
+        return LocalGroundedProvider(), f"{settings.ai_provider} provider unavailable: {str(exc)[:200]}"
+
+
 def get_provider():
     if settings.ai_provider == "anthropic":
         return AnthropicProvider()
