@@ -1286,12 +1286,32 @@ def coach_generate_block(payload: GenerateBlockRequest, db: Session = Depends(ge
     if not seed_commands:
         raise HTTPException(409, "Nothing to propose: every day in the range is already planned or unavailable.")
 
-    validation = validate_commands(db, athlete.id, seed_commands)
+    # Multi-week generation went straight to validation with provider hardcoded to
+    # "local", so the Season page's Generate button never reached the model even with a
+    # provider configured. It now follows the same seed -> refine -> validate -> fall back
+    # path as the single-week endpoint.
+    provider, provider_error = resolve_provider()
+    try:
+        if provider_error:
+            raise RuntimeError(provider_error)
+        plan = provider.refine_plan("generate_block", context, seed_summary, seed_commands)
+        commands, summary, provider_name = plan.commands, plan.summary, plan.provider
+    except Exception as exc:
+        commands, summary, provider_name = seed_commands, \
+            seed_summary + f" Provider refinement was unavailable ({str(exc)[:120]}).", "local_fallback"
+
+    validation = validate_commands(db, athlete.id, commands)
+    if not validation["valid"] and commands != seed_commands:
+        seed_validation = validate_commands(db, athlete.id, seed_commands)
+        if seed_validation["valid"]:
+            commands, validation, provider_name = seed_commands, seed_validation, "local_fallback"
+            summary += " The remote proposal failed deterministic validation, so the validated local seed was kept."
+
     proposal = AIProposal(
         athlete_id=athlete.id, proposal_type="generate_block", status="pending",
         title=f"{payload.weeks} weeks from {first.isoformat()}",
-        summary=seed_summary, commands=validation.get("commands") or seed_commands,
-        context_snapshot=_compact_context(context), validation=validation, provider="local",
+        summary=summary, commands=validation.get("commands") or commands,
+        context_snapshot=_compact_context(context), validation=validation, provider=provider_name,
     )
     db.add(proposal); db.commit(); db.refresh(proposal)
     return _proposal_dict(proposal)

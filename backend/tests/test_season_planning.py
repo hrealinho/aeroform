@@ -324,3 +324,47 @@ def test_unusable_history_falls_back(load, hours):
     resolved_load, _, warning = resolve_basis(load, hours)
     assert resolved_load == DEFAULT_WEEKLY_LOAD
     assert warning is not None
+
+
+def test_multi_week_generation_goes_through_the_provider(client, session, athlete, monkeypatch):
+    """Regression: generate-block went straight to validation with provider hardcoded to
+    "local", so the Season page's Generate button never reached the model."""
+    import app.api.routes as routes
+    from app.ai.provider import ProviderPlan
+
+    seen = {}
+
+    class Recording:
+        name = "recorded"
+
+        def refine_plan(self, kind, context, seed_summary, seed_commands):
+            seen["kind"] = kind
+            seen["count"] = len(seed_commands)
+            return ProviderPlan(seed_summary + " refined.", seed_commands, self.name)
+
+    monkeypatch.setattr(routes, "resolve_provider", lambda: (Recording(), None))
+    _objective(client)
+    client.post("/api/v1/coach/plan-season", json={"apply": True})
+    body = client.post("/api/v1/coach/generate-block", json={"weeks": 2}).json()
+
+    assert seen["kind"] == "generate_block"
+    assert seen["count"] > 0
+    assert body["provider"] == "recorded"
+    assert body["summary"].endswith("refined.")
+
+
+def test_multi_week_generation_falls_back_when_the_model_fails(client, monkeypatch):
+    import app.api.routes as routes
+
+    class Broken:
+        name = "broken"
+        def refine_plan(self, *a, **k): raise RuntimeError("model unavailable")
+
+    monkeypatch.setattr(routes, "resolve_provider", lambda: (Broken(), None))
+    _objective(client)
+    client.post("/api/v1/coach/plan-season", json={"apply": True})
+    body = client.post("/api/v1/coach/generate-block", json={"weeks": 2}).json()
+
+    assert body["provider"] == "local_fallback"
+    assert body["validation"]["valid"] is True
+    assert body["commands"]

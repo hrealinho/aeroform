@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.2 - Multi-week generation reaches the model
+
+- **`generate-block` never called the LLM.** It went straight from the deterministic seed to
+  validation with `provider` hardcoded to `"local"`, so the Season page's Generate button - the
+  main planning entry point - produced a purely deterministic plan even with `AI_PROVIDER` set.
+  It now follows the same seed -> refine -> validate -> fall back path as single-week generation.
+
+
 ## v0.8.1 - Resetting plans and deleting target races
 
 ### Added
