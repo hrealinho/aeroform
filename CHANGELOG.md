@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.8.3 - Season planner was invisible; FTP floors are no longer stored
+
+### Fixed
+
+- **The season planner UI was never rendered.** `SeasonPlanner` was imported into the Season
+  page but no element was mounted, so Preview / Apply / Generate / Reset and the target-vs-actual
+  view were all unreachable. An unused import is not a type error, so both typecheck and build
+  passed.
+- **A lower-bound threshold is no longer stored as a threshold.** Without streams, FTP falls back
+  to the best whole-activity average power, which includes coasting and descents - a floor, not a
+  threshold. It was being persisted anyway at low confidence, and because load scales with
+  `(NP/FTP)^2`, a 163 W FTP against a real 250 W inflates every ride by 2.35x. Such estimates are
+  now returned as `advisory` with an explanation and never written, so load falls back to RPE
+  rather than being computed against a floor. Windowed estimates from real streams are unaffected.
+
+
 ## v0.8.2 - Multi-week generation reaches the model
 
 - **`generate-block` never called the LLM.** It went straight from the deterministic seed to

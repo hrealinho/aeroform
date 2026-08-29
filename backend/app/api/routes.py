@@ -564,11 +564,12 @@ def _threshold_effective_from(db: Session, athlete_id: int, requested: date | No
 def estimate_athlete_thresholds(payload: ThresholdEstimateRequest, db: Session = Depends(get_db)):
     athlete = demo_athlete(db)
     estimates = estimate_thresholds(db, athlete.id, payload.history_days)
-    saved = []
+    saved: list = []
+    advisory: list = []
     task_id = None
     if payload.persist:
         effective = _threshold_effective_from(db, athlete.id, None, payload.apply_to_history)
-        saved = persist_estimates(db, athlete.id, estimates, valid_from=effective, apply_if_manual_missing=True)
+        saved, advisory = persist_estimates(db, athlete.id, estimates, valid_from=effective, apply_if_manual_missing=True)
         if payload.apply_to_history and saved:
             # Recomputing a whole history inside the request both blocked the worker and
             # was never committed, so the backfill silently did nothing. It now runs as a
@@ -577,6 +578,17 @@ def estimate_athlete_thresholds(payload: ThresholdEstimateRequest, db: Session =
     return {
         "estimates": [e.as_dict() for e in estimates],
         "saved": len(saved),
+        # Deliberately not stored: a lower bound saved as a threshold would inflate the
+        # load of every activity computed against it.
+        "advisory": [{
+            **e.as_dict(),
+            "why_not_saved": (
+                "This is a lower bound, not a threshold: without power/pace streams it can only "
+                "be derived from a whole-activity average, which includes coasting and descents. "
+                "Storing it would inflate the load of every activity. Enter a tested value "
+                "manually, or sync with STRAVA_SYNC_STREAMS=true and estimate again."
+            ),
+        } for e in advisory],
         "effective_from": saved[0].valid_from.isoformat() if saved else None,
         "recompute_task_id": task_id,
         **current_thresholds_and_zones(db, athlete.id),

@@ -147,3 +147,101 @@ def test_zones_are_exposed_for_each_threshold_kind(client, session, athlete):
     assert len(by_metric["threshold_hr"]["zones"]) == 7
     assert by_metric["threshold_speed_mps"]["display_value"].endswith("/km")
     assert by_metric["threshold_speed_mps"]["zones"][3]["faster_than"]
+
+
+# --- lower bounds must never be stored as thresholds ------------------------
+
+def _ride_without_streams(session, athlete_id, avg_power, days_ago=10, seconds=3600):
+    """A ride with an activity average but no stream, which is what a summary-only
+    Strava backfill produces."""
+    start = datetime.now(timezone.utc) - timedelta(days=days_ago)
+    activity = Activity(
+        athlete_id=athlete_id, sport="cycling", name="ride", start_time=start,
+        duration_s=seconds, moving_time_s=seconds, distance_m=seconds * 8,
+        avg_power=avg_power, avg_hr=140, max_hr=170,
+        fingerprint=activity_fingerprint("cycling", start, seconds, seconds * 8 + avg_power),
+    )
+    session.add(activity)
+    session.flush()
+    session.add(ActivityMetrics(activity_id=activity.id, training_load=0.0, details={}))
+    session.commit()
+    return activity
+
+
+def test_an_ftp_from_a_ride_average_is_advisory_not_stored(client, session, athlete):
+    """Regression: with no streams, FTP fell back to the best whole-activity average -
+    a floor that includes coasting and descents - and was stored as a threshold. Load
+    scales with (NP/FTP)^2, so a floor stored as an FTP inflates every subsequent ride."""
+    _ride_without_streams(session, athlete.id, avg_power=172)
+
+    body = client.post("/api/v1/thresholds/estimate", json={
+        "history_days": 365, "persist": True, "apply_to_history": False,
+    }).json()
+
+    advisory_metrics = {a["metric"] for a in body["advisory"]}
+    assert "ftp" in advisory_metrics
+    entry = next(a for a in body["advisory"] if a["metric"] == "ftp")
+    assert entry["is_lower_bound"] is True
+    assert "lower bound" in entry["why_not_saved"]
+
+    stored = {t["metric"] for t in body["thresholds"]}
+    assert "ftp" not in stored, "a lower bound must not be stored as a threshold"
+
+
+def test_load_is_not_corrupted_by_the_unstored_lower_bound(client, session, athlete):
+    """The point of not storing it: load must fall back to RPE rather than be computed
+    against a floor."""
+    activity = _ride_without_streams(session, athlete.id, avg_power=172)
+    client.post("/api/v1/thresholds/estimate", json={"history_days": 365, "persist": True})
+    client.post("/api/v1/thresholds/recompute")
+
+    session.expire_all()
+    metrics = session.get(ActivityMetrics, activity.id)
+    assert "power" not in metrics.load_method
+
+
+def test_a_manual_ftp_is_used_and_beats_any_estimate(client, session, athlete):
+    """The documented fix for a too-low estimate."""
+    activity = _ride_without_streams(session, athlete.id, avg_power=200)
+    client.post("/api/v1/thresholds/estimate", json={"history_days": 365, "persist": True})
+
+    response = client.post("/api/v1/thresholds/manual", json={
+        "sport": "cycling", "metric": "ftp", "value": 265,
+    })
+    assert response.status_code == 200
+    ftp = next(t for t in response.json()["thresholds"] if t["metric"] == "ftp")
+    assert ftp["value"] == 265
+    assert ftp["source"] == "manual"
+
+    session.expire_all()
+    metrics = session.get(ActivityMetrics, activity.id)
+    assert metrics.load_method == "power"
+    # 1h at 200 W against a 265 W FTP is well under an hour at threshold.
+    assert metrics.training_load < 100
+
+
+def test_a_windowed_estimate_from_streams_is_still_stored(client, session, athlete):
+    """Only the activity-average fallback is advisory; a real best-effort window is not."""
+    from app.metrics.thresholds import LOWER_BOUND_METHODS
+
+    start = datetime.now(timezone.utc) - timedelta(days=8)
+    seconds = 4200
+    samples = [{"time": (start + timedelta(seconds=i)).isoformat(), "power": 260, "hr": 158}
+               for i in range(seconds)]
+    activity = Activity(
+        athlete_id=athlete.id, sport="cycling", name="hard", start_time=start,
+        duration_s=seconds, moving_time_s=seconds, distance_m=seconds * 9,
+        avg_power=260, avg_hr=158, max_hr=176,
+        fingerprint=activity_fingerprint("cycling", start, seconds, seconds * 9),
+    )
+    session.add(activity)
+    session.flush()
+    session.add(ActivityStreams(activity_id=activity.id, samples=samples))
+    session.add(ActivityMetrics(activity_id=activity.id, training_load=0.0, details={}))
+    session.commit()
+
+    body = client.post("/api/v1/thresholds/estimate", json={"history_days": 365, "persist": True}).json()
+    ftp = next((t for t in body["thresholds"] if t["metric"] == "ftp"), None)
+    assert ftp is not None, "a windowed estimate should be stored"
+    estimate = next(e for e in body["estimates"] if e["metric"] == "ftp")
+    assert estimate["method"] not in LOWER_BOUND_METHODS

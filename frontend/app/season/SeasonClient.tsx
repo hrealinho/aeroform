@@ -31,6 +31,7 @@ export default function SeasonClient(){
  const range=useMemo(()=>{const dates=[...blocks.flatMap(b=>[new Date(b.start_date).getTime(),new Date(b.end_date).getTime()]),...objectives.map(o=>new Date(o.event_date).getTime()),Date.now()];return {min:Math.min(...dates),max:Math.max(...dates,Date.now()+90*86400000)}},[blocks,objectives]);
  const pct=(d:string)=>Math.max(0,Math.min(100,(new Date(d).getTime()-range.min)/(range.max-range.min)*100));
  return <><h1>Season</h1><p className="muted">Objectives, training phases and the projected fitness trajectory driven by your calendar.</p>{error&&<div className="card section errorText">{error}</div>}
+ <SeasonPlanner/>
  <div className="card section"><div className="row spread"><div><h2>Season timeline</h2><p className="muted">Blocks provide the deterministic structure the AI planner will operate inside.</p></div><div className="muted">{new Date(range.min).toLocaleDateString()} - {new Date(range.max).toLocaleDateString()}</div></div><div className="timeline">
   {blocks.map(b=><div className={`timelineBlock ${b.block_type}`} key={b.id} style={{left:`${pct(b.start_date)}%`,width:`${Math.max(2,pct(b.end_date)-pct(b.start_date))}%`}} title={`${b.start_date} - ${b.end_date}`}><b>{b.name}</b><small>{b.block_type}</small></div>)}
   {objectives.map(o=><div className="timelineObjective" key={o.id} style={{left:`${pct(o.event_date)}%`}} title={o.event_date}><span>{o.priority}</span><b>{o.name}</b></div>)}

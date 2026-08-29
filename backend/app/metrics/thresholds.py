@@ -13,6 +13,17 @@ from app.metrics.load import resolve_durations
 from app.metrics.terrain import sample_durations
 
 
+# These methods derive a value from a whole-activity average, which includes coasting,
+# descents and junctions. They produce a LOWER BOUND, never a threshold, and must never be
+# persisted as one: a too-low FTP inflates every subsequent load by (real/stored)^2, so
+# storing a floor is worse than storing nothing and falling back to RPE.
+LOWER_BOUND_METHODS = {
+    "best_sustained_activity_average_power",
+    "best_sustained_activity_average_speed",
+    "best_sustained_activity_average_hr",
+}
+
+
 @dataclass
 class ThresholdEstimate:
     sport: str
@@ -22,6 +33,10 @@ class ThresholdEstimate:
     method: str
     evidence: dict
 
+    @property
+    def is_lower_bound(self) -> bool:
+        return self.method in LOWER_BOUND_METHODS
+
     def as_dict(self) -> dict:
         return {
             "sport": self.sport,
@@ -30,6 +45,7 @@ class ThresholdEstimate:
             "confidence": self.confidence,
             "method": self.method,
             "evidence": self.evidence,
+            "is_lower_bound": self.is_lower_bound,
         }
 
 
@@ -432,14 +448,27 @@ def _current_rows(db: Session, athlete_id: int, at: date | None = None) -> list[
     return result
 
 
-def persist_estimates(db: Session, athlete_id: int, estimates: list[ThresholdEstimate], valid_from: date | None = None, apply_if_manual_missing: bool = True) -> list[AthleteThreshold]:
+def persist_estimates(db: Session, athlete_id: int, estimates: list[ThresholdEstimate],
+                      valid_from: date | None = None, apply_if_manual_missing: bool = True,
+                      ) -> tuple[list[AthleteThreshold], list[ThresholdEstimate]]:
+    """Store the estimates worth storing. Returns (saved rows, advisory estimates).
+
+    Lower-bound estimates are deliberately NOT stored. Without streams, threshold power
+    falls back to the best whole-activity average, which is a floor - and a floor stored as
+    an FTP silently inflates the load of every ride that follows it. Reporting it as
+    advisory keeps the information without corrupting the metrics.
+    """
     valid_from = valid_from or date.today()
     current = {(r.sport, r.metric): r for r in _current_rows(db, athlete_id, valid_from)}
-    saved = []
+    saved: list[AthleteThreshold] = []
+    advisory: list[ThresholdEstimate] = []
     for estimate in estimates:
         key = (estimate.sport, estimate.metric)
         existing = current.get(key)
         if apply_if_manual_missing and existing and existing.source == "manual":
+            continue
+        if estimate.is_lower_bound:
+            advisory.append(estimate)
             continue
         # Close any previous inferred active estimate. Manual history is never altered.
         old_auto = list(db.scalars(select(AthleteThreshold).where(
@@ -464,7 +493,7 @@ def persist_estimates(db: Session, athlete_id: int, estimates: list[ThresholdEst
     db.commit()
     for row in saved:
         db.refresh(row)
-    return saved
+    return saved, advisory
 
 
 def _range(label: str, low: float | None, high: float | None, unit: str) -> dict:
