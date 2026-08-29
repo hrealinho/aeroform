@@ -39,6 +39,7 @@ from app.metrics.race_predictor import predict as predict_races
 from app.services.dedup import activity_fingerprint
 from app.services.duplicates import find_duplicate_groups, delete_activity
 from app.services.activity_detail import activity_detail
+from app.services.plan_reset import delete_objective_with_plan, reset_plan
 
 router = APIRouter(prefix="/api/v1")
 
@@ -657,23 +658,43 @@ def list_objectives(db: Session = Depends(get_db)):
     return list(db.scalars(select(Objective).where(Objective.athlete_id == athlete.id).order_by(Objective.event_date)))
 
 
-@router.delete("/objectives/{objective_id}", status_code=204)
-def delete_objective(objective_id: int, db: Session = Depends(get_db)):
+@router.delete("/objectives/{objective_id}")
+def delete_objective(objective_id: int, with_plan: bool = False, db: Session = Depends(get_db)):
+    """Delete a target race.
+
+    ``with_plan`` also removes the blocks and workouts built for it, including the locked
+    race workout - which is otherwise unreachable. Without it the plan is detached and
+    survives, which is what you want when swapping one race for another on the same build.
+    """
     athlete = demo_athlete(db)
-    obj = db.get(Objective, objective_id)
-    if not obj or obj.athlete_id != athlete.id:
+    result = delete_objective_with_plan(db, athlete.id, objective_id, with_plan=with_plan)
+    if result is None:
         raise HTTPException(404, "Objective not found")
-    # Detach dependants first. Without this, Postgres rejects the delete outright with a
-    # foreign-key violation and SQLite (which does not enforce them by default) leaves
-    # planned workouts and blocks pointing at a row that no longer exists.
-    db.execute(update(PlannedWorkout).where(
-        PlannedWorkout.athlete_id == athlete.id, PlannedWorkout.objective_id == obj.id,
-    ).values(objective_id=None))
-    db.execute(update(TrainingBlock).where(
-        TrainingBlock.athlete_id == athlete.id, TrainingBlock.objective_id == obj.id,
-    ).values(objective_id=None))
-    db.delete(obj)
-    db.commit()
+    return {"deleted": objective_id, "with_plan": with_plan, **result.as_dict()}
+
+
+@router.delete("/plan")
+def reset_training_plan(
+    scope: str = Query("future", pattern="^(future|all)$"),
+    objective_id: int | None = None,
+    include_locked: bool = False,
+    db: Session = Depends(get_db),
+):
+    """Clear planned workouts and training blocks.
+
+    Defaults to future-only, because a reset should not erase the record of what was
+    prescribed for training already done. Matched workouts are kept for the same reason.
+    Locked workouts, including the race, need ``include_locked``.
+    """
+    athlete = demo_athlete(db)
+    result = reset_plan(db, athlete.id, scope=scope, objective_id=objective_id,
+                        include_locked=include_locked)
+    return {
+        "scope": scope, "objective_id": objective_id, "include_locked": include_locked,
+        **result.as_dict(),
+        "note": ("Past and matched workouts were kept as training history. "
+                 "Use scope=all to remove them too.") if scope == "future" else None,
+    }
 
 
 @router.post("/training-blocks")
@@ -833,13 +854,18 @@ def update_planned(workout_id: int, payload: PlannedWorkoutUpdate, db: Session =
 
 
 @router.delete("/planned-workouts/{workout_id}", status_code=204)
-def delete_planned(workout_id: int, db: Session = Depends(get_db)):
+def delete_planned(workout_id: int, force: bool = False, db: Session = Depends(get_db)):
+    """Delete a planned workout. ``force`` is required for a locked one.
+
+    Without the escape hatch a locked workout was undeletable, which made the race the
+    season planner creates permanently stuck in the calendar.
+    """
     athlete = demo_athlete(db)
     workout = db.get(PlannedWorkout, workout_id)
     if not workout or workout.athlete_id != athlete.id:
         raise HTTPException(404, "Planned workout not found")
-    if workout.locked:
-        raise HTTPException(409, "Locked workouts cannot be deleted")
+    if workout.locked and not force:
+        raise HTTPException(409, "Workout is locked. Pass force=true to delete it anyway.")
     before = _workout_dict(workout)
     _audit(db, athlete.id, workout, "delete", before, "Workout deleted")
     db.delete(workout)

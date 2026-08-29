@@ -15,6 +15,7 @@ export default function SeasonPlanner(){
   const [busy,setBusy]=useState("");
   const [error,setError]=useState("");
   const [weeks,setWeeks]=useState(4);
+  const [confirm,setConfirm]=useState("");
 
   const loadProgress=useCallback(async()=>{
     const r=await fetch(`${API}/analytics/block-progress`,{cache:"no-store"});
@@ -31,6 +32,30 @@ export default function SeasonPlanner(){
       return j;
     }catch(e:any){setError(e?.message||"Request failed");return null}
     finally{setBusy("")}
+  }
+
+  async function destructive(path:string,tag:string){
+    setBusy(tag);setError("");
+    try{
+      const r=await fetch(`${API}${path}`,{method:"DELETE"});
+      const j=await r.json();
+      if(!r.ok) throw new Error(typeof j.detail==="string"?j.detail:JSON.stringify(j.detail));
+      return j;
+    }catch(e:any){setError(e?.message||"Request failed");return null}
+    finally{setBusy("");setConfirm("")}
+  }
+
+  async function resetPlan(scope:"future"|"all"){
+    // include_locked, or the race workout the planner created survives the reset and the
+    // next plan collides with it.
+    const j=await destructive(`/plan?scope=${scope}&include_locked=true`,`reset-${scope}`);
+    if(j){
+      setPlan(null);
+      await loadProgress();
+      setError(`Removed ${j.workouts_deleted} workouts and ${j.blocks_deleted} blocks.`
+        +(j.matched_skipped?` Kept ${j.matched_skipped} matched to completed activities.`:"")
+        +(j.note?` ${j.note}`:""));
+    }
   }
 
   const preview=async()=>setPlan(await call("/coach/plan-season",{apply:false},"preview"));
@@ -77,6 +102,27 @@ export default function SeasonPlanner(){
             {[1,2,4,8,12].map(w=><option key={w} value={w}>{w} week{w>1?"s":""}</option>)}
           </select>
           <button className="button" disabled={!!busy} onClick={generate}>{busy==="generate"?"Generating…":"Generate"}</button>
+        </div>
+      </div>
+    </div>
+
+    <div className="card section">
+      <div className="row spread">
+        <div>
+          <h2>Reset plan</h2>
+          <p className="muted">Removes training blocks and planned workouts, including the locked race session. Completed and matched sessions are kept as training history unless you clear everything.</p>
+        </div>
+        <div className="row">
+          {confirm==="future"
+            ? <><span className="muted">Clear all future planned work?</span>
+                <button className="button" disabled={!!busy} onClick={()=>resetPlan("future")}>{busy==="reset-future"?"Clearing…":"Yes, clear"}</button>
+                <button onClick={()=>setConfirm("")}>Cancel</button></>
+            : <button className="button secondary" disabled={!!busy} onClick={()=>setConfirm("future")}>Clear future plan</button>}
+          {confirm==="all"
+            ? <><span className="muted">Clear the entire plan, past included?</span>
+                <button className="button" disabled={!!busy} onClick={()=>resetPlan("all")}>{busy==="reset-all"?"Clearing…":"Yes, clear all"}</button>
+                <button onClick={()=>setConfirm("")}>Cancel</button></>
+            : <button className="button secondary" disabled={!!busy} onClick={()=>setConfirm("all")}>Clear everything</button>}
         </div>
       </div>
     </div>

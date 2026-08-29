@@ -15,6 +15,17 @@ export default function SeasonClient(){
  const [block,setBlock]=useState({name:"Base",block_type:"base",start_date:iso(today),end_date:iso(new Date(today.getTime()+42*86400000)),targetLoad:"450",objective_id:""});
  const load=useCallback(async()=>{try{const [o,b,p]=await Promise.all([fetch(`${API}/objectives`).then(r=>r.json()),fetch(`${API}/training-blocks`).then(r=>r.json()),fetch(`${API}/analytics/projection?start=${iso(new Date(today.getTime()-30*86400000))}&end=${iso(yearEnd)}`).then(r=>r.json())]);setObjectives(o);setBlocks(b);setProjection(p)}catch(e:any){setError(e.message)}},[]);
  useEffect(()=>{load()},[load]);
+ const [pendingDelete,setPendingDelete]=useState<number|null>(null);
+ async function removeObjective(id:number,withPlan:boolean){
+   const r=await fetch(`${API}/objectives/${id}?with_plan=${withPlan}`,{method:"DELETE"});
+   if(!r.ok){setError(await r.text());return}
+   const j=await r.json();
+   setPendingDelete(null);
+   setError(withPlan
+     ? `Race deleted with its plan: ${j.workouts_deleted} workouts, ${j.blocks_deleted} blocks removed.`
+     : "Race deleted. Its blocks and workouts were kept and detached.");
+   await load();
+ }
  async function createObjective(e:React.FormEvent){e.preventDefault();const r=await fetch(`${API}/objectives`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:obj.name,event_date:obj.event_date,sport:obj.sport,priority:obj.priority,distance_m:obj.distanceKm?Number(obj.distanceKm)*1000:null,elevation_m:obj.elevationM?Number(obj.elevationM):null})});if(!r.ok){setError(await r.text());return}await load()}
  async function createBlock(e:React.FormEvent){e.preventDefault();const r=await fetch(`${API}/training-blocks`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:block.name,block_type:block.block_type,start_date:block.start_date,end_date:block.end_date,objective_id:block.objective_id?Number(block.objective_id):null,targets:{weekly_load:Number(block.targetLoad)}})});if(!r.ok){setError(await r.text());return}await load()}
  const range=useMemo(()=>{const dates=[...blocks.flatMap(b=>[new Date(b.start_date).getTime(),new Date(b.end_date).getTime()]),...objectives.map(o=>new Date(o.event_date).getTime()),Date.now()];return {min:Math.min(...dates),max:Math.max(...dates,Date.now()+90*86400000)}},[blocks,objectives]);

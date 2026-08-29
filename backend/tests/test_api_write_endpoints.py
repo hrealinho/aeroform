@@ -77,7 +77,7 @@ def test_objective_and_block_lifecycle(client):
 
     assert client.patch(f"/api/v1/training-blocks/{block.json()['id']}", json={"name": "Base 2"}).status_code == 200
     assert client.delete(f"/api/v1/training-blocks/{block.json()['id']}").status_code == 204
-    assert client.delete(f"/api/v1/objectives/{objective_id}").status_code == 204
+    assert client.delete(f"/api/v1/objectives/{objective_id}").status_code == 200
 
 
 def test_deleting_an_objective_detaches_its_workouts(client, session, tomorrow):
@@ -93,7 +93,7 @@ def test_deleting_an_objective_detaches_its_workouts(client, session, tomorrow):
         "duration_s": 3600, "intensity": "easy", "objective_id": objective_id,
     }).json()["id"]
 
-    assert client.delete(f"/api/v1/objectives/{objective_id}").status_code == 204
+    assert client.delete(f"/api/v1/objectives/{objective_id}").status_code == 200
     session.expire_all()
     assert session.get(PlannedWorkout, workout_id).objective_id is None
 

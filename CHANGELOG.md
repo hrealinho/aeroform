@@ -1,5 +1,28 @@
 # Changelog
 
+## v0.8.1 - Resetting plans and deleting target races
+
+### Added
+
+- **`DELETE /api/v1/plan`** clears training blocks and planned workouts. Defaults to
+  future-only, because a reset should not erase the record of what was prescribed for training
+  already done, and keeps workouts matched to completed activities for the same reason.
+  `scope=all` and `include_locked=true` widen it. Everything removed is audited.
+- **`DELETE /api/v1/objectives/{id}?with_plan=true`** deletes a target race together with its
+  blocks and workouts. Without the flag the plan is detached and survives, which is what you
+  want when swapping one race for another on the same build.
+- **`force=true` on `DELETE /api/v1/planned-workouts/{id}`** to remove a locked workout.
+- Season page: *Clear future plan* / *Clear everything*, both behind a confirm step, and
+  per-race *Delete* offering "race only" or "race + plan".
+
+### Fixed
+
+- **A race workout could never be deleted.** The season planner creates it `locked=True` and
+  `delete_planned` refused locked workouts unconditionally, so the race was permanently stuck
+  in the calendar - and deleting its objective merely orphaned it.
+- `DELETE /objectives/{id}` now returns what it removed rather than a bare 204.
+
+
 ## v0.8.0 - Executable prescriptions
 
 Sessions are now prescribed the way a coach writes them, in the unit the athlete thinks in,
