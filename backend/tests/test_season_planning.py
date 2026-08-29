@@ -289,3 +289,38 @@ def test_block_progress_is_empty_without_blocks(client):
     body = client.get("/api/v1/analytics/block-progress").json()
     assert body["blocks"] == []
     assert "objective" in body["note"]
+
+
+# --- plans built without history ------------------------------------------
+
+def test_a_plan_without_history_uses_a_labelled_default(client, session, athlete):
+    """Regression: with no activities, typical weekly load is 0, so every target
+    collapsed to ~1 load. The structure was right and the numbers meaningless, which is
+    worse than refusing because it looks like a plan."""
+    from app.planning.season import DEFAULT_WEEKLY_LOAD
+
+    _objective(client)
+    body = client.post("/api/v1/coach/plan-season", json={"apply": False}).json()
+
+    assert body["basis"]["using_default"] is True
+    assert "Not enough training history" in body["basis"]["warning"]
+    assert body["basis"]["ramping_from_load"] == DEFAULT_WEEKLY_LOAD
+
+    peak = max(b["targets"]["peak_weekly_load"] for b in body["blocks"])
+    assert peak > 100, f"targets must be usable, got peak {peak}"
+
+
+def test_real_history_is_preferred_over_the_default(client, session, athlete):
+    from app.planning.season import resolve_basis
+
+    load, hours, warning = resolve_basis(520.0, 9.5)
+    assert (load, hours, warning) == (520.0, 9.5, None)
+
+
+@pytest.mark.parametrize(("load", "hours"), [(0, 0), (10, 1), (39, 8), (400, 0)])
+def test_unusable_history_falls_back(load, hours):
+    from app.planning.season import DEFAULT_WEEKLY_LOAD, resolve_basis
+
+    resolved_load, _, warning = resolve_basis(load, hours)
+    assert resolved_load == DEFAULT_WEEKLY_LOAD
+    assert warning is not None

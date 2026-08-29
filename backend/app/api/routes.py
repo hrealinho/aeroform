@@ -29,7 +29,7 @@ from app.ai.context import build_athlete_context, PLAN_HORIZON_DAYS
 from app.ai.analyst import analyse_question
 from app.ai.provider import resolve_provider
 from app.ai.planner import generate_week_seed, adapt_week_seed, generate_block_seed
-from app.planning.season import periodise
+from app.planning.season import periodise, resolve_basis
 from app.ai.commands import validate_commands, apply_commands
 from app.ai.explain import explain_workout
 from app.services.ingestion import recalculate_activity_metrics, threshold as threshold_at
@@ -1144,6 +1144,8 @@ def plan_season(payload: SeasonPlanRequest, db: Session = Depends(get_db)):
         raise HTTPException(409, "The objective date is in the past relative to the plan start.")
 
     state = context.get("state") or {}
+    basis_load, basis_hours, basis_warning = resolve_basis(
+        float(state.get("typical_weekly_load_8w") or 0), float(state.get("typical_weekly_hours_8w") or 0))
     blocks = periodise(
         start=start, objective_date=objective.event_date,
         typical_weekly_load=float(state.get("typical_weekly_load_8w") or 0),
@@ -1221,9 +1223,15 @@ def plan_season(payload: SeasonPlanRequest, db: Session = Depends(get_db)):
                       "long_objective": _long_objective(objective)},
         "start_date": blocks[0].start.isoformat(),
         "total_weeks": total_weeks,
-        "basis": {"typical_weekly_load_8w": state.get("typical_weekly_load_8w"),
-                  "typical_weekly_hours_8w": state.get("typical_weekly_hours_8w"),
-                  "note": "Targets ramp from your own recent load, capped so the plan never generates a load-spike warning."},
+        "basis": {
+            "typical_weekly_load_8w": state.get("typical_weekly_load_8w"),
+            "typical_weekly_hours_8w": state.get("typical_weekly_hours_8w"),
+            "ramping_from_load": round(basis_load, 1),
+            "ramping_from_hours": round(basis_hours, 1),
+            "using_default": basis_warning is not None,
+            "warning": basis_warning,
+            "note": "Targets ramp from your own recent load, capped so the plan never generates a load-spike warning.",
+        },
         "blocks": preview,
         "applied": applied,
         "method": "linear_periodisation_v1",

@@ -22,6 +22,14 @@ MAX_WEEKLY_RAMP = 1.07
 MAX_PEAK_MULTIPLE = 1.45
 # Every Nth week is easier. 3:1 is the conventional loading pattern.
 RECOVERY_EVERY = 4
+
+# Below this, an athlete's history cannot support a target. A plan built from a typical
+# weekly load of 0 produces peak weeks of ~1 load - structurally correct and completely
+# meaningless, which is worse than refusing, because it looks like a plan. A conservative
+# default is used instead and the response says so.
+MIN_USABLE_WEEKLY_LOAD = 40.0
+DEFAULT_WEEKLY_LOAD = 280.0
+DEFAULT_WEEKLY_HOURS = 6.0
 RECOVERY_FACTOR = 0.62
 
 # Fraction of peak weekly load each phase targets. The phase named "peak" must be the
@@ -116,6 +124,23 @@ def _phase_sequence(total_weeks: int, long_objective: bool) -> list[str]:
         + (["peak"] * peak) + (["taper"] * taper)
 
 
+def resolve_basis(typical_weekly_load: float, typical_weekly_hours: float) -> tuple[float, float, str | None]:
+    """Decide what load the plan should ramp from.
+
+    Returns (load, hours, warning). A warning means the numbers are a documented default
+    rather than the athlete's own history, and the caller must surface it.
+    """
+    load = float(typical_weekly_load or 0)
+    hours = float(typical_weekly_hours or 0)
+    if load >= MIN_USABLE_WEEKLY_LOAD and hours > 0:
+        return load, hours, None
+    return DEFAULT_WEEKLY_LOAD, DEFAULT_WEEKLY_HOURS, (
+        f"Not enough training history to derive targets, so this plan ramps from a default "
+        f"{DEFAULT_WEEKLY_LOAD:.0f} load / {DEFAULT_WEEKLY_HOURS:.0f} h week rather than from your "
+        f"own data. Import or sync your history and regenerate for targets that fit you."
+    )
+
+
 def periodise(
     start: date,
     objective_date: date,
@@ -132,8 +157,7 @@ def periodise(
         return []
     taper_weeks = sum(1 for p in phases if p == "taper")
 
-    base_load = max(float(typical_weekly_load or 0), 1.0)
-    base_hours = max(float(typical_weekly_hours or 0), 0.5)
+    base_load, base_hours, _ = resolve_basis(typical_weekly_load, typical_weekly_hours)
     load_per_hour = base_load / base_hours
 
     # Peak is reached by ramping, but never beyond what the athlete has established.
