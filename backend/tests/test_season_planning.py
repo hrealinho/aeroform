@@ -215,12 +215,29 @@ def test_plan_season_previews_without_creating_blocks(client, session, athlete):
 def test_plan_season_apply_creates_blocks_and_audits(client, session, athlete):
     from app.domain.models import PlanChangeAudit, TrainingBlock
 
-    _objective(client)
+    from app.domain.models import PlannedWorkout
+
+    objective = _objective(client)
     body = client.post("/api/v1/coach/plan-season", json={"apply": True}).json()
-    assert len(body["applied"]) == len(body["blocks"])
     assert session.query(TrainingBlock).count() == len(body["blocks"])
     audit = session.query(PlanChangeAudit).filter_by(entity_type="season_plan").one()
     assert audit.after_state["blocks"]
+
+    # The race itself is part of the plan: applied covers the blocks plus the race.
+    assert len(body["applied"]) == len(body["blocks"]) + 1
+    race = session.query(PlannedWorkout).filter_by(objective_id=objective["id"]).one()
+    assert race.locked is True                    # the date is not the planner's to move
+    assert race.name == "Target race"
+    assert race.projected_load > 0
+
+
+def test_reapplying_does_not_duplicate_the_race(client, session, athlete):
+    from app.domain.models import PlannedWorkout
+
+    objective = _objective(client)
+    client.post("/api/v1/coach/plan-season", json={"apply": True})
+    client.post("/api/v1/coach/plan-season", json={"apply": True})
+    assert session.query(PlannedWorkout).filter_by(objective_id=objective["id"]).count() == 1
 
 
 def test_reapplying_a_plan_replaces_rather_than_stacks(client, session, athlete):

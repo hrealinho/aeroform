@@ -1,6 +1,8 @@
 from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 
+from app.planning import sessions
+from app.planning.prescription import prescription_unit
 from app.planning.workouts import estimate_planned_load
 
 HARD = {"threshold", "vo2", "anaerobic", "race"}
@@ -44,25 +46,20 @@ def _constraint_for_day(context: dict, day: date, duration_h: float) -> tuple[bo
     return True, None
 
 
-def _steps(intensity: str, duration_s: float) -> list[dict]:
-    if intensity == "threshold" and duration_s >= 3000:
-        # 15m warm-up + 4x(8m/2m) + remaining cooldown.
-        used = 15 * 60 + 4 * (8 * 60 + 2 * 60)
-        cooldown = max(duration_s - used, 5 * 60)
-        return [
-            {"type": "warmup", "intensity": "easy", "duration_s": 15 * 60},
-            {"type": "repeat", "repeat": 4, "steps": [{"type": "work", "intensity": "threshold", "duration_s": 8 * 60}, {"type": "recovery", "intensity": "easy", "duration_s": 2 * 60}]},
-            {"type": "cooldown", "intensity": "easy", "duration_s": cooldown},
-        ]
-    if intensity == "vo2" and duration_s >= 2700:
-        used = 15 * 60 + 5 * (3 * 60 + 3 * 60)
-        cooldown = max(duration_s - used, 5 * 60)
-        return [
-            {"type": "warmup", "intensity": "easy", "duration_s": 15 * 60},
-            {"type": "repeat", "repeat": 5, "steps": [{"type": "work", "intensity": "vo2", "duration_s": 3 * 60}, {"type": "recovery", "intensity": "easy", "duration_s": 3 * 60}]},
-            {"type": "cooldown", "intensity": "easy", "duration_s": cooldown},
-        ]
-    return [{"type": "main", "intensity": intensity, "duration_s": duration_s}]
+def _steps(intensity: str, duration_s: float, sport: str = "running",
+           thresholds: dict | None = None, unit: str = "time", prefer: str | None = None) -> list[dict]:
+    """Render a structured session from the library.
+
+    Replaces two hardcoded shapes (4x8min threshold, 5x3min VO2) that left every other
+    intensity as one undifferentiated block. Each step now carries both a duration and a
+    distance plus a pace or power target, so the prescription is executable.
+    """
+    spec = sessions.pick(intensity, sport, duration_s, prefer=prefer)
+    return sessions.render(spec, sport, duration_s, thresholds or {}, unit=unit)
+
+
+def _session_name(intensity: str, sport: str, duration_s: float, prefer: str | None = None) -> str:
+    return sessions.pick(intensity, sport, duration_s, prefer=prefer).name
 
 
 def _template(sport: str, long_day: int) -> list[dict]:
@@ -71,16 +68,16 @@ def _template(sport: str, long_day: int) -> list[dict]:
             {"weekday": 1, "name": "Threshold bike", "intensity": "threshold", "minutes": 75, "key": True},
             {"weekday": 3, "name": "Endurance ride", "intensity": "endurance", "minutes": 90},
             {"weekday": long_day, "name": "Long endurance ride", "intensity": "endurance", "minutes": 210, "key": True},
-            {"weekday": (long_day + 1) % 7, "name": "Recovery spin", "intensity": "recovery", "minutes": 60},
+            {"weekday": (long_day + 1) % 7, "name": "Recovery spin", "intensity": "recovery", "minutes": 60, "max_minutes": 75},
         ]
     if sport in {"trail_running", "hiking", "mountaineering"}:
         training_sport = "trail_running" if sport == "trail_running" else sport
         return [
-            {"weekday": 1, "name": "Uphill threshold", "intensity": "threshold", "minutes": 60, "key": True, "sport": training_sport},
+            {"weekday": 1, "name": "Uphill threshold", "intensity": "threshold", "minutes": 60, "key": True, "sport": training_sport, "session": "uphill_threshold"},
             {"weekday": 2, "name": "Easy aerobic", "intensity": "easy", "minutes": 50, "sport": "running" if sport == "trail_running" else training_sport},
             {"weekday": 4, "name": "Easy aerobic", "intensity": "easy", "minutes": 45, "sport": "running" if sport == "trail_running" else training_sport},
-            {"weekday": long_day, "name": "Long mountain session", "intensity": "endurance", "minutes": 180, "key": True, "sport": training_sport},
-            {"weekday": (long_day + 1) % 7, "name": "Recovery", "intensity": "recovery", "minutes": 40, "sport": "running" if sport == "trail_running" else training_sport},
+            {"weekday": long_day, "name": "Long mountain session", "intensity": "endurance", "minutes": 180, "key": True, "sport": training_sport, "session": "long_mountain_session"},
+            {"weekday": (long_day + 1) % 7, "name": "Recovery", "intensity": "recovery", "minutes": 40, "max_minutes": 45, "sport": "running" if sport == "trail_running" else training_sport},
         ]
     if sport == "climbing":
         return [
@@ -89,13 +86,15 @@ def _template(sport: str, long_day: int) -> list[dict]:
             {"weekday": long_day, "name": "Long mountain aerobic", "intensity": "endurance", "minutes": 150, "sport": "hiking", "key": True},
             {"weekday": (long_day + 1) % 7, "name": "Climbing technique", "intensity": "easy", "minutes": 75, "sport": "climbing"},
         ]
-    # running default
+    # running default. Two quality sessions a week, mirroring how a build week is
+    # actually written, with the long run as the third key session.
     return [
-        {"weekday": 1, "name": "Threshold intervals", "intensity": "threshold", "minutes": 60, "key": True},
+        {"weekday": 1, "name": "Threshold intervals", "intensity": "threshold", "minutes": 60, "key": True, "session": "km_repeats"},
         {"weekday": 2, "name": "Easy run", "intensity": "easy", "minutes": 50},
-        {"weekday": 4, "name": "Easy run + strides", "intensity": "easy", "minutes": 45},
-        {"weekday": long_day, "name": "Long run", "intensity": "endurance", "minutes": 120, "key": True},
-        {"weekday": (long_day + 1) % 7, "name": "Recovery run", "intensity": "recovery", "minutes": 40},
+        {"weekday": 3, "name": "Tempo", "intensity": "tempo", "minutes": 55, "key": True, "session": "tempo_3_2_1"},
+        {"weekday": 4, "name": "Easy run", "intensity": "easy", "minutes": 45},
+        {"weekday": long_day, "name": "Long run", "intensity": "endurance", "minutes": 120, "key": True, "session": "long_run"},
+        {"weekday": (long_day + 1) % 7, "name": "Recovery run", "intensity": "recovery", "minutes": 40, "max_minutes": 45},
     ]
 
 
@@ -129,7 +128,7 @@ def choose_intent(context: dict) -> tuple[str, str]:
 
 def generate_week_seed(context: dict, week_start: date, objective_id: int | None = None, strategy: str = "balanced",
                        target_hours: float | None = None, phase: str | None = None,
-                       intent: str | None = None) -> tuple[str, list[dict]]:
+                       intent: str | None = None, include_rest_days: bool = False) -> tuple[str, list[dict]]:
     week_start = week_start - timedelta(days=week_start.weekday())
     objective = _primary_objective(context, objective_id)
     sport = _primary_sport(context, objective)
@@ -180,6 +179,8 @@ def generate_week_seed(context: dict, week_start: date, objective_id: int | None
     if profile.get("available_hours_per_week"):
         target_h = min(target_h, float(profile["available_hours_per_week"]))
 
+    thresholds = context.get("threshold_values") or {}
+    unit = prescription_unit(profile, sport)
     template = _template(sport, long_day)
     base_h = sum(x["minutes"] for x in template) / 60
     scale = max(0.65, min(1.7, target_h / max(base_h, 0.1)))
@@ -200,6 +201,10 @@ def generate_week_seed(context: dict, week_start: date, objective_id: int | None
         if day < now_day or day.isoformat() in occupied:
             continue
         minutes = max(30, round(spec["minutes"] * scale / 5) * 5)
+        # A per-session ceiling, so scaling a big week does not turn a recovery run into
+        # an hour of running.
+        if spec.get("max_minutes"):
+            minutes = min(minutes, int(spec["max_minutes"]))
         allowed, _ = _constraint_for_day(context, day, minutes / 60)
         if not allowed:
             # Search up to three nearby days while preserving key-session spacing.
@@ -224,19 +229,42 @@ def generate_week_seed(context: dict, week_start: date, objective_id: int | None
         elevation = None
         if vertical_target and "long" in spec["name"].lower():
             elevation = round(vertical_target * 0.45)
+        prefer = spec.get("session")
+        steps = _steps(spec["intensity"], duration_s, workout_sport, thresholds, unit, prefer)
         commands.append({
             "action": "create_workout",
             "scheduled_at": scheduled.isoformat(),
             "sport": workout_sport,
-            "name": spec["name"],
+            "name": _session_name(spec["intensity"], workout_sport, duration_s, prefer),
             "duration_s": duration_s,
+            "distance_m": sessions.session_total_distance(steps) or None,
             "elevation_m": elevation,
             "intensity": spec["intensity"],
-            "steps": _steps(spec["intensity"], duration_s),
+            "steps": steps,
             "objective_id": objective.get("id") if objective else None,
             "block_id": block.get("id") if block else None,
             "reason": f"{phase.title()}-phase {spec['intensity']} session for {objective['name'] if objective else sport + ' development'}." + (" Key session." if spec.get("key") else ""),
         })
+
+    if include_rest_days:
+        # A blank day and a prescribed rest day mean different things to an athlete.
+        # Zero duration and zero load, so nothing downstream is affected.
+        planned_days = {c["scheduled_at"][:10] for c in commands} | existing_dates
+        for offset in range(7):
+            day = week_start + timedelta(days=offset)
+            if day < now_day or day.isoformat() in planned_days:
+                continue
+            commands.append({
+                "action": "create_workout",
+                "scheduled_at": datetime.combine(day, time(9, 0)).isoformat(),
+                "sport": sport, "name": "Rest day", "duration_s": 0.0,
+                "intensity": "recovery",
+                "steps": [{"type": "rest", "intensity": "recovery", "duration_s": 0}],
+                "objective_id": objective.get("id") if objective else None,
+                "block_id": block.get("id") if block else None,
+                "reason": "Scheduled rest. Recovery is the session.",
+            })
+        commands.sort(key=lambda c: c["scheduled_at"])
 
     estimated_load = sum(estimate_planned_load(c.get("duration_s"), c.get("steps"), c.get("intensity")).load for c in commands)
     total_hours = sum(float(c.get("duration_s") or 0) for c in commands) / 3600
@@ -322,7 +350,7 @@ def adapt_week_seed(context: dict, week_start: date) -> tuple[str, list[dict]]:
         if candidates:
             w = sorted(candidates, key=lambda x: x["scheduled_at"])[0]
             new_duration = max(30 * 60, float(w.get("duration_s") or 3600) * 0.75)
-            commands.append({"action": "update_workout", "workout_id": w["id"], "duration_s": new_duration, "intensity": "easy", "steps": _steps("easy", new_duration), "reason": f"Recent {trigger.get('sport')} session added {float(trigger.get('load') or 0):.0f} load; reduce the next quality session to protect recovery."})
+            commands.append({"action": "update_workout", "workout_id": w["id"], "duration_s": new_duration, "intensity": "easy", "steps": _steps("easy", new_duration, w.get("sport") or "running"), "reason": f"Recent {trigger.get('sport')} session added {float(trigger.get('load') or 0):.0f} load; reduce the next quality session to protect recovery."})
             reasons.append("softened a nearby quality session after an unexpectedly large recent load")
 
     projected_total = actual_load + future_load

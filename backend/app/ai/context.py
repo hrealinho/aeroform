@@ -208,6 +208,14 @@ def build_athlete_context(db: Session, athlete: Athlete, today: date | None = No
         "hardest_recent": hardest_recent,
         "recent_activities": sorted(recent_activities, key=lambda x: x["start_time"]),
         "thresholds": current_thresholds,
+        # Flat metric -> value map, for building pace and power targets. The keyed form
+        # above is for display; the planner needs to look up "threshold_speed_mps"
+        # without knowing which sport scope it was stored under.
+        "threshold_values": {
+            metric: data["value"]
+            for key, data in current_thresholds.items()
+            for metric in [key.split(":", 1)[1]]
+        },
         "objectives": objectives_data,
         "current_block": block_data,
         "constraints": constraints_data,

@@ -97,6 +97,9 @@ class PlanningConstraintCreate(BaseModel):
 
 class CoachProfileUpdate(BaseModel):
     available_hours_per_week: float | None = Field(default=None, ge=0, le=80)
+    # time | distance | auto. Auto gives runners distance and everyone else time, which
+    # is how each group already thinks about a session.
+    prescription: str = Field(default="auto", pattern="^(auto|time|distance)$")
     preferred_long_day: int | None = Field(default=None, ge=0, le=6)
     preferred_rest_day: int | None = Field(default=None, ge=0, le=6)
     doubles_allowed: bool = False

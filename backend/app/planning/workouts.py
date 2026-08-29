@@ -25,6 +25,10 @@ class WorkoutEstimate:
 
 def infer_intensity(steps: Iterable[dict] | None) -> str:
     """Infer the dominant intensity label from structured workout steps."""
+    steps = list(steps or [])
+    # A rest day is not a recovery session; it must not be reported as one.
+    if steps and all(str(s.get("type")) == "rest" for s in steps):
+        return "rest"
     labels: list[str] = []
     for step in steps or []:
         label = str(step.get("intensity") or step.get("type") or "").lower()
@@ -49,6 +53,8 @@ def estimate_planned_load(duration_s: float | None, steps: list[dict] | None = N
     """
     duration_s = max(float(duration_s or 0), 0.0)
     label = (intensity or infer_intensity(steps)).lower()
+    if label == "rest" or duration_s <= 0:
+        return WorkoutEstimate(load=0.0, intensity_factor=0.0, method="rest")
     factor = INTENSITY_FACTORS.get(label, INTENSITY_FACTORS["endurance"])
     load = (duration_s / 3600.0) * (factor**2) * 100.0
     return WorkoutEstimate(load=round(load, 1), intensity_factor=factor)

@@ -1,5 +1,45 @@
 # Changelog
 
+## v0.8.0 - Executable prescriptions
+
+Sessions are now prescribed the way a coach writes them, in the unit the athlete thinks in,
+with a target they can actually execute.
+
+### Added
+
+- **Time or distance, athlete's choice.** `prescription: auto | time | distance` on the coach
+  profile. Auto gives runners distance and everyone else time. Both are always populated -
+  they are the same session described two ways - with `unit` recording which was authoritative
+  so rounding never drifts the intended one.
+- **Pace and power targets** (`app/planning/prescription.py`). Every step carries a band:
+  `3:55-4:10/km` for running off `threshold_speed_mps`, `238-262 W` for cycling off FTP.
+  Ranges rather than single numbers, because an exact number invites chasing it on a day when
+  that is not appropriate. No threshold means no target, rather than an invented one.
+- **A session library** (`app/planning/sessions.py`) of 15 named sessions declared as data:
+  1km repeats, Tempo 3-2-1, Fast 8-4-2s, Rolling 400s, Broken miles, On-off kilometres, Race
+  pace fartlek, Uphill threshold, progressive and race-practice long runs, and more. Replaces
+  two hardcoded shapes that left every other intensity as one undifferentiated block - so a
+  long run, a recovery run and a marathon-pace tempo were structurally identical.
+- **The race is in the plan.** `plan-season` creates a locked planned workout on the objective
+  date. Previously the taper simply stopped and the projection had no load on the day that
+  matters most.
+- **Explicit rest days**, so a blank day is distinguishable from a deliberate one. Zero
+  duration, zero load, and `infer_intensity` reports `rest` rather than `recovery`.
+- **`scripts/check_ai_provider.py`** exercises the configured provider against a real plan and
+  audits the response against the rules the system prompt sets - session count, days used,
+  volume drift, command shape. None of that is enforced by the schema, so a provider quietly
+  ignoring the contract is now visible.
+
+### Fixed
+
+- Pace formatting rounded seconds after splitting, so 299.7s/km displayed as `4:60/km`.
+- Interval volume scaled without limit: a nine-hour week produced `11x1km`. Capped - extra
+  weekly volume belongs in easy running, not in more reps.
+- A recovery run in a big week scaled to 61 minutes. Per-session ceilings added.
+- Non-scalable ladders under-delivered their slot (a 60-minute session rendering as 49), so the
+  week came in under target. Leftover time is absorbed by the cool-down.
+
+
 ## v0.7.2 - Taper fixes, and provider config that degrades instead of failing
 
 ### Fixed

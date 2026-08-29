@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 import shutil
@@ -978,7 +978,9 @@ def plan_audit(limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_d
 
 
 def _coach_profile_dict(profile: AthleteCoachProfile | None) -> dict:
+    preferences = (profile.preferences if profile else None) or {}
     return {
+        "prescription": preferences.get("prescription", "auto"),
         "available_hours_per_week": profile.available_hours_per_week if profile else None,
         "preferred_long_day": profile.preferred_long_day if profile else 5,
         "preferred_rest_day": profile.preferred_rest_day if profile else 0,
@@ -1020,8 +1022,12 @@ def update_coach_profile(payload: CoachProfileUpdate, db: Session = Depends(get_
     if profile is None:
         profile = AthleteCoachProfile(athlete_id=athlete.id)
         db.add(profile)
-    for key, value in payload.model_dump().items():
+    values = payload.model_dump()
+    # prescription lives inside preferences so no column has to be added.
+    prescription = values.pop("prescription", "auto")
+    for key, value in values.items():
         setattr(profile, key, value)
+    profile.preferences = {**(profile.preferences or {}), "prescription": prescription}
     db.commit(); db.refresh(profile)
     return _coach_profile_dict(profile)
 
@@ -1175,6 +1181,32 @@ def plan_season(payload: SeasonPlanRequest, db: Session = Depends(get_db)):
             db.add(block)
             db.flush()
             applied.append({"id": block.id, "name": block.name, "block_type": block.block_type})
+        # The race belongs in the plan. Without it the calendar taper just stops and the
+        # projection has no load on the day that matters most. Locked, because the date
+        # and the distance are not the planner's to move.
+        race_at = datetime.combine(objective.event_date, time(8, 0), tzinfo=timezone.utc)
+        existing_race = db.scalar(select(PlannedWorkout).where(
+            PlannedWorkout.athlete_id == athlete.id,
+            PlannedWorkout.objective_id == objective.id,
+            PlannedWorkout.scheduled_at >= day_start(objective.event_date),
+            PlannedWorkout.scheduled_at <= day_end(objective.event_date),
+        ))
+        if existing_race is None:
+            race_duration = objective.expected_duration_s or (
+                (objective.distance_m or 0) / 3.2 if objective.distance_m else 3 * 3600)
+            race = PlannedWorkout(
+                athlete_id=athlete.id, objective_id=objective.id,
+                scheduled_at=race_at, sport=objective.sport, name=objective.name,
+                duration_s=race_duration, distance_m=objective.distance_m,
+                elevation_m=objective.elevation_m, locked=True,
+                steps=[{"type": "race", "intensity": "race", "duration_s": race_duration,
+                        "distance_m": objective.distance_m}],
+                projected_load=estimate_planned_load(race_duration, None, "race").load,
+            )
+            db.add(race)
+            db.flush()
+            applied.append({"id": race.id, "name": race.name, "block_type": "race"})
+
         db.add(PlanChangeAudit(
             athlete_id=athlete.id, entity_type="season_plan", entity_id=objective.id, action="create",
             before_state=None, after_state={"blocks": preview}, initiated_by="user",
