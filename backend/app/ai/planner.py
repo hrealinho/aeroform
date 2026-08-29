@@ -230,20 +230,31 @@ def generate_week_seed(context: dict, week_start: date, objective_id: int | None
         if vertical_target and "long" in spec["name"].lower():
             elevation = round(vertical_target * 0.45)
         prefer = spec.get("session")
-        steps = _steps(spec["intensity"], duration_s, workout_sport, thresholds, unit, prefer)
+        # The picker may fall back when a slot is too short for the requested session - a
+        # 35-minute tempo cannot hold a Tempo 3-2-1. The command must then describe what was
+        # actually prescribed, or the name says "Easy run" while the intensity says "tempo"
+        # and the load is computed for a session nobody is doing.
+        chosen = sessions.pick(spec["intensity"], workout_sport, duration_s, prefer=prefer)
+        steps = sessions.render(chosen, workout_sport, duration_s, thresholds, unit=unit)
         commands.append({
             "action": "create_workout",
             "scheduled_at": scheduled.isoformat(),
             "sport": workout_sport,
-            "name": _session_name(spec["intensity"], workout_sport, duration_s, prefer),
+            "name": chosen.name,
             "duration_s": duration_s,
             "distance_m": sessions.session_total_distance(steps) or None,
             "elevation_m": elevation,
-            "intensity": spec["intensity"],
+            "intensity": chosen.intensity,
             "steps": steps,
             "objective_id": objective.get("id") if objective else None,
             "block_id": block.get("id") if block else None,
-            "reason": f"{phase.title()}-phase {spec['intensity']} session for {objective['name'] if objective else sport + ' development'}." + (" Key session." if spec.get("key") else ""),
+            "reason": (
+                f"{phase.title()}-phase {chosen.intensity} session for "
+                f"{objective['name'] if objective else sport + ' development'}."
+                + (" Key session." if spec.get("key") and chosen.intensity == spec["intensity"] else "")
+                + (f" Requested {spec['intensity']} but the {minutes}-minute slot could not hold it."
+                   if chosen.intensity != spec["intensity"] else "")
+            ),
         })
 
     if include_rest_days:

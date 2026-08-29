@@ -237,3 +237,22 @@ def test_recovery_sessions_stay_short_however_big_the_week_is():
     recovery = [c for c in commands if c["intensity"] == "recovery"]
     assert recovery
     assert all(c["duration_s"] <= 46 * 60 for c in recovery)
+
+
+def test_a_downgraded_session_is_described_honestly():
+    """Regression: a slot too short for the requested session rendered an easy run but
+    still reported intensity "tempo", so the name and the intensity disagreed and the
+    load was computed for a session nobody was doing."""
+    context = _context()
+    # A tiny weekly budget forces every slot below the interval minimums.
+    context["profile"]["available_hours_per_week"] = 3
+    _, commands = generate_week_seed(context, date.today() + timedelta(days=7))
+
+    for c in commands:
+        spec = sessions.SESSION_LIBRARY
+        matching = [s for s in spec.values() if s.name == c["name"]]
+        assert matching, f"unknown session name {c['name']}"
+        assert matching[0].intensity == c["intensity"], (
+            f"{c['name']} reported as {c['intensity']} but the session is {matching[0].intensity}")
+        if "could not hold it" in (c.get("reason") or ""):
+            assert "Key session" not in c["reason"]
