@@ -1,0 +1,26 @@
+# Python bytecode and caches
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Virtual environments must never enter the image
+.venv
+venv
+env
+
+# Local database and imported athlete data
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# OS noise
+.DS_Store

@@ -1,0 +1,21 @@
+# Never ship the host's node_modules into the image.
+#
+# `RUN npm ci` installs linux binaries; `COPY . .` then overwrote them with the host's
+# darwin/arm64 build. That is both wrong and expensive: 395MB of node_modules plus 231MB
+# of stale .next output made a 86MB build context and pushed the Next.js build worker past
+# the container memory limit, which is the SIGKILL.
+node_modules
+.next
+out
+
+# Build and test artefacts
+coverage
+*.tsbuildinfo
+.eslintcache
+
+# Local env and editor noise
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log

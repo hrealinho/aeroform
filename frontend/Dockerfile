@@ -5,5 +5,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
+# Bounded heap so the build fails loudly rather than being OOM-killed by the container.
+# Raise together with Docker's memory limit if the build outgrows it.
+ENV NODE_OPTIONS=--max-old-space-size=1024
 RUN npm run build
 CMD ["npm","start"]
